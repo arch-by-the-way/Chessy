@@ -11,7 +11,7 @@
       style-src 'self' 'unsafe-inline';
       img-src 'self' data:;
       font-src 'self';
-      connect-src 'self' wss://mywebsite.up.railway.app;
+      connect-src 'self' wss://chess-chessy.up.railway.app;
       object-src 'none';
       base-uri 'self';
       form-action 'self';
