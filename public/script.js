@@ -927,6 +927,12 @@ gsqEl.addEventListener('pointerup', e => {
 
 gsqEl.addEventListener('pointercancel', endDrag);
 
+gsqEl.addEventListener('click', e => {
+  if (swallowClick) return;                      // the click that follows a drag / pick-up must not be handled twice
+  const d = e.target.closest('.gsq');
+  if (d) onSquare(+d.dataset.sq);
+});
+
 function askPromo(cands) {
   G.pending = cands;
   const col = G.s.turn;
