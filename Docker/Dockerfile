@@ -8,7 +8,7 @@ RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit
  && npm cache clean --force
 
 #server path relative to root
-COPY ../server.js ./ 
+COPY server/server.js ./ 
 
 USER node
 EXPOSE 8080
