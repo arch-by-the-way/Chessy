@@ -9,7 +9,7 @@ const GRACE_MS = 60_000;
 const INVITE_TTL = 30_000;
 const MAX_CLIENTS = 76;
 // comma-separated list in the Railway variable ALLOWED_ORIGINS, e.g. https://my-site.netlify.app
-const ALLOWED = new Set((process.env.ALLOWED_ORIGINS || 'https://chess-chessy.app').split(','));
+const ALLOWED = new Set((process.env.ALLOWED_ORIGINS || 'https://chess-chessy.app').split(',').map((s) => s.trim()));
 
 const users = new Map();       // userId -> { nick, nickNorm, sockets:Set, tokens:Set, timer, gameId }
 const nickIndex = new Map();   // nickNorm -> userId
@@ -150,7 +150,11 @@ const server = createServer((req, res) => {
 const wss = new WebSocketServer({
   server,
   maxPayload: 1024,
-  verifyClient: ({ origin }) => ALLOWED.has(origin),
+  verifyClient: ({ origin }) => {
+    const ok = ALLOWED.has(origin);
+    if (!ok) console.log('rejected origin:', origin);
+    return ok;
+  },
 });
 
 wss.on('connection', (ws) => {
