@@ -19,6 +19,21 @@ const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const normNick = (s) => String(s).normalize('NFKC').trim().toLowerCase();
 const validNick = (s) => /^[\p{L}\p{N}_-]{3,16}$/u.test(s);
 const RESERVED = new Set(['admin', 'system', 'moderator']);
+const ALLOWED = new Set(['https://ваш-сайт.netlify.app']);
+const MAX_CLIENTS = 76;
+
+const wss = new WebSocketServer({
+  server,
+  maxPayload: 1024,
+  verifyClient: ({ origin }) => ALLOWED.has(origin),
+});
+
+wss.on('connection', (ws, req) => {
+  if (wss.clients.size > MAX_CLIENTS) {
+    ws.close(1013, 'server busy'); // 1013 = Try Again Later
+    return;
+  }
+});
 
 function issueToken(userId) {
   const token = crypto.randomBytes(32).toString('base64url');
@@ -51,7 +66,6 @@ const server = createServer((req, res) => {
   if (req.url === '/health') { res.writeHead(200); return res.end('ok'); }
   res.writeHead(404); res.end();
 });
-const wss = new WebSocketServer({ server, maxPayload: 1024 });
 
 wss.on('connection', (ws) => {
   ws.userId = null;
