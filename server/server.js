@@ -1,7 +1,9 @@
 // server.js  (npm i ws)
+import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import crypto from 'node:crypto';
 
+const PORT = Number(process.env.PORT) || 8080;
 const HEARTBEAT_MS = 15_000;
 const GRACE_MS = 60_000;
 
@@ -44,7 +46,12 @@ function removeUser(userId) {
   users.delete(userId);
 }
 
-const wss = new WebSocketServer({ port: 8080, maxPayload: 1024 });
+// HTTP-сервер нужен для healthcheck Railway (/health) и для WS upgrade
+const server = createServer((req, res) => {
+  if (req.url === '/health') { res.writeHead(200); return res.end('ok'); }
+  res.writeHead(404); res.end();
+});
+const wss = new WebSocketServer({ server, maxPayload: 1024 });
 
 wss.on('connection', (ws) => {
   ws.userId = null;
@@ -129,3 +136,12 @@ const hb = setInterval(() => {
   }
 }, HEARTBEAT_MS);
 wss.on('close', () => clearInterval(hb));
+server.listen(PORT, '0.0.0.0', () => console.log(`listening on :${PORT}`));
+
+// Корректное завершение при деплое (Railway шлёт SIGTERM)
+process.on('SIGTERM', () => {
+  clearInterval(hb);
+  for (const ws of wss.clients) ws.close(1001, 'server restarting');
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 5_000).unref();
+});
