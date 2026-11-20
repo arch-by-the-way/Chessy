@@ -86,6 +86,7 @@ function onNet(raw) {
     case 'move':         onNetMove(m); break;
     case 'game_end':     onNetEnd(m); break;
     case 'opp_status':   if (G.net && !G.over) toast(m.online ? 'Opponent is back' : 'Opponent disconnected. Waiting up to 60 s…'); break;
+    case 'nick_status': onNickStatus(m); break;
   }
 }
 
@@ -291,6 +292,8 @@ function setBusy(kind, text = '') {
   findBtn.textContent = kind ? 'Cancel' : 'Find opponent';
   $('nick').disabled = $('inviteBtn').disabled = !!kind;
   renderOlTc();
+  if (kind) markFound(false);
+    else nickEl.dispatchEvent(new Event('input'));       // re-check after the busy state ends
   say(text);
 }
 
@@ -342,3 +345,23 @@ dlg.addEventListener('close', () => {
   setBusy(null);
   document.querySelectorAll('.invite').forEach((b) => document.body.append(b));
 });
+
+/* ---------- live nickname check (500 ms after the last keystroke) ---------- */
+const nickEl = $('nick'), inviteBtnEl = $('inviteBtn');
+const normNickC = (s) => s.normalize('NFKC').trim().toLowerCase();
+let nickTimer = null;
+
+const markFound = (on) => inviteBtnEl.classList.toggle('found', on);
+
+nickEl.addEventListener('input', () => {
+  clearTimeout(nickTimer);
+  markFound(false);                                    // any edit invalidates the previous answer
+  const nick = nickEl.value.trim();
+  if (!/^[\p{L}\p{N}_-]{3,16}$/u.test(nick)) return;
+  nickTimer = setTimeout(() => send({ type: 'check_nick', nick }), 500);
+});
+
+function onNickStatus(m) {
+  // ignore stale answers: the field may have changed while the request was in flight
+  if (normNickC(m.nick) === normNickC(nickEl.value)) markFound(m.found && !netBusy);
+}

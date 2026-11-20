@@ -39,11 +39,11 @@ function sendToUser(id, obj) {
   const s = JSON.stringify(obj);
   for (const ws of u.sockets) if (ws.readyState === ws.OPEN) ws.send(s);
 }
-function rateOk(ws) {                       // 20 messages per 10 s for the "expensive" commands
+function rateOk(ws, key = 'hits', limit = 20) {      // 20 messages per 10 s for the "expensive" commands
   const now = Date.now();
-  ws.hits = (ws.hits || []).filter((t) => now - t < 10_000);
-  if (ws.hits.length >= 20) return false;
-  ws.hits.push(now);
+  ws[key] = (ws[key] || []).filter((t) => now - t < 10_000);
+  if (ws[key].length >= limit) return false;
+  ws[key].push(now);
   return true;
 }
 const unqueue = (id) => { const i = queue.findIndex((q) => q.userId === id); if (i >= 0) queue.splice(i, 1); };
@@ -220,6 +220,13 @@ wss.on('connection', (ws) => {
     }
 
     if (!ws.userId) return;                 // everything below needs a registered user
+
+    if (msg.type === 'check_nick') {
+    if (!rateOk(ws, 'chk', 30)) return;                 // silent: this is only a UI hint
+    const nick = String(msg.nick ?? '');
+    const id = validNick(nick.trim()) ? nickIndex.get(normNick(nick)) : null;
+    return send({ type: 'nick_status', nick, found: !!id && id !== ws.userId });
+  }
 
     /* ----- matchmaking ----- */
     if (msg.type === 'find') {
