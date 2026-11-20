@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="stylesheet" href="style.css">
+<meta name="theme-color" content="#262421">
+<script src="../gamesBase/games.js" defer></script>
+<script src="../gamesBase/gamesReader.js" defer></script>
+<script src="script.js" defer></script>
+<title>Chessy — play chess in your browser</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;800;900&display=swap" rel="stylesheet">
+</head>
+
+<body>
+  <div class="probe" id="bgProbe" aria-hidden="true"></div>
+  <!-- Animated chess background: 1-5 boards, count and size chosen in JS -->
+  <div class="bg" aria-hidden="true">
+    <div class="boards" id="boards"></div>
+    <div class="shade"></div>
+  </div>
+
+  <header>
+    <div class="left">
+      <button class="burger" id="burger" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="drawer">
+        <span></span><span></span><span></span>
+      </button>
+      <a class="brand" href="#top" aria-label="Chessy home">
+        <span class="logo">
+          <!-- simple knight-head logo (placeholder) -->
+          <svg viewBox="0 0 24 24" fill="#fff" aria-hidden="true">
+            <path d="M7 21h11v-2.2H7V21zm.4-3.6h10.2c.1-1.7-.2-3.6-1-5.3-.8-1.7-2-3-3.3-3.9l.9-1.5-1.8-.8-1.1-2.3c-1.6.5-3 1.6-3.9 3.1L4 9.9l1 2.2 2.4-.7c.1.8.5 1.5 1.1 2-1.5 1.1-2.3 2.6-2.1 4z"/>
+          </svg>
+        </span>
+        <span class="wordmark">Chessy</span>
+      </a>
+    </div>
+    <nav aria-label="Main">
+      <a href="#" id="navPlay">Play</a>
+      <a href="#learn">Learn</a>
+    </nav>
+  </header>
+
+  <div class="backdrop" id="backdrop"></div>
+  <aside class="drawer" id="drawer" aria-label="Main menu"></aside>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <main class="page" id="top">
+    <section class="hero">
+      <h1>Chess in your browser</h1>
+      <p>Play live against real people. Nothing to install.</p>
+      <div class="actions">
+        <button class="btn primary" id="playBtn" type="button">Play</button>
+        <a class="btn secondary" href="#learn">Learn More</a>
+      </div>
+    </section>
+
+    <section class="learn" id="learn">
+      <div class="learn-panel">
+        <h2>What is Chessy?</h2>
+        <dl>
+          <div>
+            <dt>Play from any device</dt>
+            <dd>Open the site on your phone or computer and start a game in a few taps.</dd>
+          </div>
+          <div>
+            <dt>Find an opponent or a friend</dt>
+            <dd>Get matched with someone online, or search for a player by nickname.</dd>
+          </div>
+          <div>
+            <dt>Built on our own engine</dt>
+            <dd>The rules and the game logic run on a chess engine written in Java.</dd>
+          </div>
+          <div>
+            <dt>Make the board yours</dt>
+            <dd>Board and site themes are on the way.</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>© 2026 Chessy</span>
+    <nav aria-label="Footer">
+      <a href="#">Privacy</a>
+      <a href="#">Terms</a>
+      <a href="#">Contact</a>
+    </nav>
+  </footer>
+
+  <!-- ===== Play in Person: time control page ===== -->
+  <section class="screen" id="timeScreen" hidden aria-label="Choose a time control">
+    <div class="s-top">
+      <button class="s-back" id="tsBack" type="button" aria-label="Back">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M10 6 4 12l6 6M4 12h16"/></svg>
+      </button>
+      <h1>Play in Person</h1>
+    </div>
+    <div class="s-body">
+      <div class="s-inner">
+        <p class="s-lead">Two players, one device. Pick a time control.</p>
+        <div id="tcGroups"></div>
+        <div class="tc-group">
+          <h2>Custom<small>your own clock</small></h2>
+          <div class="custom-row" id="customRow">
+            <label>Minutes per side
+              <input id="cMin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" data-min="1" data-max="180" value="10">
+            </label>
+            <label>Bonus per move (sec)
+              <input id="cInc" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" data-min="0" data-max="180" value="0">
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="s-foot">
+      <div class="tc-summary" id="tcSummary"></div>
+      <button class="btn primary" id="tsPlay" type="button">Play</button>
+    </div>
+  </section>
+
+  <!-- ===== Play in Person: the board ===== -->
+  <section class="screen game" id="gameScreen" hidden aria-label="Game">
+    <div class="g-main">
+      <div class="pbar" id="topBar"></div>
+      <div class="gwrap" id="gwrap">
+      <div class="evalbar" id="evalBar" hidden aria-label="Evaluation bar">
+        <div class="ev-white" id="evFill"></div><span class="ev-num" id="evNum">0</span>
+      </div>
+      <div class="gboard" id="gboard">
+        <div class="gsquares" id="gsq"></div>
+
+        <div class="g-overlay" id="promoOv" hidden>
+          <h3>Promote to</h3>
+          <div class="promo" id="promoBtns"></div>
+        </div>
+        <div class="g-overlay" id="resultOv" hidden>
+          <h3 id="resTitle"></h3>
+          <p id="resSub"></p>
+          <div class="res-actions">
+            <button class="btn primary" id="rematchBtn" type="button">Rematch</button>
+            <button class="btn secondary" id="newTcBtn" type="button">New time control</button>
+          </div>
+          <button class="linkbtn" id="viewBoardBtn" type="button">View board</button>
+        </div>
+        <div class="g-overlay solid" id="pauseOv" hidden>
+          <h3>Paused</h3>
+          <p>The board is hidden while the clock is stopped.</p>
+          <button class="btn primary" id="resumeBtn" type="button">Resume</button>
+        </div>
+      </div>
+      </div>
+      <div class="pbar" id="botBar"></div>
+    </div>
+
+    <nav class="gmenu" aria-label="Game menu">
+            <button class="gm-btn" id="gmUndo" type="button" title="Undo move (←)" aria-label="Undo move" disabled>
+        <svg class="ic" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>Undo
+      </button>
+      <button class="gm-btn" id="gmRedo" type="button" title="Redo move (→)" aria-label="Redo move" disabled>
+        <svg class="ic" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>Redo
+      </button>
+      <button class="gm-btn" id="gmReturn" type="button">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M10 6 4 12l6 6M4 12h16"/></svg>Return
+      </button>
+      <button class="gm-btn" id="gmRestart" type="button">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v5h5"/></svg>Restart
+      </button>
+      <button class="gm-btn" id="gmPause" type="button">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg><span>Pause</span>
+      </button>
+      <button class="gm-btn" id="gmSettings" type="button">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h1M11 17h9"/><circle cx="16" cy="7" r="2.2"/><circle cx="8" cy="17" r="2.2"/></svg>Settings
+      </button>
+    </nav>
+  </section>
+
+  <!-- Game settings -->
+  <dialog id="gSettings" aria-labelledby="gsTitle">
+    <div class="dlg">
+      <div class="dlg-head">
+        <h3 id="gsTitle">Settings</h3>
+        <button class="x" type="button" id="gsClose" aria-label="Close">×</button>
+      </div>
+      <label class="row">
+        <span><b>Flip board</b><small>After every move the board turns to the player who moves next</small></span>
+        <span class="switch"><input type="checkbox" id="optFlip"><i></i></span>
+      </label>
+      <label class="row">
+        <span><b>Rotate pieces</b><small>After every move all pieces turn 180° to face the player who moves next</small></span>
+        <span class="switch"><input type="checkbox" id="optRot"><i></i></span>
+      </label>
+      <label class="row">
+        <span><b>Show evaluation bar</b><small>A bar next to the board that shows who is ahead (material only for now)</small></span>
+        <span class="switch"><input type="checkbox" id="optEval"><i></i></span>
+      </label>
+      <div>
+        <b>Piece style</b>
+        <span class="note">Each style is a complete set from one artist</span>
+        <div class="sets" id="setBtns"></div>
+      </div>
+      <div>
+        <b>Board theme</b>
+        <span class="note">Changes the game board only, not the site</span>
+        <div class="themes" id="themeBtns"></div>
+      </div>
+      <p class="note credits">Pieces from the Lichess repository: Cburnett by Colin M.L. Burnett (GPLv2+), Chessnut by Alexis Luengas (Apache 2.0).</p>
+    </div>
+  </dialog>
+
+  <!-- Play dialog: matchmaking + nickname search (UI only for now) -->
+  <dialog id="playDialog" aria-labelledby="playTitle">
+    <div class="dlg">
+      <div class="dlg-head">
+        <h3 id="playTitle">Play online</h3>
+        <button class="x" type="button" id="closeDlg" aria-label="Close">×</button>
+      </div>
+      <button class="btn primary" type="button" id="findBtn" style="font-size:1.2rem;padding:16px">Find opponent</button>
+      <div class="divider">or</div>
+      <form class="search" id="searchForm" autocomplete="off">
+        <input id="nick" type="search" placeholder="Search player by nickname" maxlength="24" aria-label="Nickname">
+        <button class="btn secondary" type="submit">Search</button>
+      </form>
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+    </div>
+  </dialog>
+
+</body>
+</html>
