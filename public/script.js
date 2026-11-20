@@ -31,6 +31,7 @@ const bgProbe = document.getElementById('bgProbe');  // invisible box = space th
 const MAX_BG_BOARDS = 5;
 const bgBoards = [];      // { el, pieces, id, plies, step, running, dead }
 let reader = null, IDs = [];   // filled by GamesReader.load(); declared here because layoutBgBoards() runs before the load
+let game = null;   // { gameId, color, opponent }
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 const col = sq => FILES.indexOf(sq[0]);
@@ -214,27 +215,20 @@ function play() {
 const dlg = document.getElementById('playDialog');
 const statusEl = document.getElementById('status');
 const findBtn = document.getElementById('findBtn');
-let searchTimer = null;
+const QUICK = { bullet: [1, 0], blitz: [3, 2], rapid: [10, 0] };   // menu shortcuts preselect a time control
 
-function openPlay(e) { if (e) e.preventDefault(); statusEl.textContent = ''; dlg.showModal(); }
+function openPlay(e, tc) {
+  if (e && e.preventDefault) e.preventDefault();
+  statusEl.textContent = '';
+  connect();                       // client.js: opens the socket if needed
+  if (tc) pickOnlineTc(tc[0], tc[1]);
+  renderPlay();
+  dlg.showModal();
+}
 document.getElementById('playBtn').addEventListener('click', openPlay);
-document.getElementById('navPlay').addEventListener('click', openPlay);
+document.getElementById('acctBtn').addEventListener('click', openPlay);   // top right: Register / nickname
 document.getElementById('closeDlg').addEventListener('click', () => dlg.close());
-dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });  // click outside closes
-dlg.addEventListener('close', () => { clearTimeout(searchTimer); findBtn.textContent = 'Find opponent'; });
-
-// TODO (backend stage): replace with fetch('/api/matchmaking/join', { method: 'POST' })
-findBtn.addEventListener('click', () => {
-  if (findBtn.dataset.busy === '1') return;
-  findBtn.dataset.busy = '1';
-  findBtn.textContent = 'Searching…';
-  statusEl.textContent = 'Looking for an opponent';
-  searchTimer = setTimeout(() => {
-    findBtn.dataset.busy = '';
-    findBtn.textContent = 'Find opponent';
-    statusEl.textContent = 'Online play isn’t connected yet. It arrives with the backend.';
-  }, 1800);
-});
+//dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
 
 /* ======================= Main menu ======================= */
 // \uFE0E keeps the symbols as text on phones (no emoji)
@@ -309,6 +303,7 @@ drawer.addEventListener('click', e => {
   setMenu(false);
   if (id === 'play') { setTimeout(() => openPlay(), 200); return; }
   if (id === 'inperson') { setTimeout(() => openTimeScreen(), 200); return; }
+  if (QUICK[id]) { setTimeout(() => openPlay(null, QUICK[id]), 200); return; }
   // TODO: route to real pages once they exist (e.g. location.href = '/' + id)
   const title = btn.querySelector('.mi-title').textContent;
   setTimeout(() => toast(title + ' is coming soon'), 250);
@@ -611,17 +606,19 @@ function capturedHTML(col, cnt) {
   return html;
 }
 function setBar(el, col, cnt) {
+  const name = G.net ? (col === G.net.color ? G.net.me : G.net.opponent) : 'Guest';
   const av = G.av[col];
   el.innerHTML = `
     <div class="avatar ps-cburnett" style="background:${av.bg}" aria-hidden="true"><span class="pimg pc-${av.k}"></span></div>
     <div class="pinfo">
       <div class="prow">
-        <span class="pnm"><span class="pname">Guest</span><span class="pelo">(???)</span></span>
+        <span class="pnm"><span class="pname"></span><span class="pelo">${G.net ? '' : '(???)'}</span></span>
         <span class="pcap" aria-label="Captured pieces">${capturedHTML(col, cnt)}</span>
       </div>
       <span class="pside">${SIDE[col]}</span>
     </div>
     <div class="clock" data-c="${col}" aria-label="${SIDE[col]} clock">0:00</div>`;
+    el.querySelector('.pname').textContent = name;
 }
 function renderBars() {
   const bottom = G.flipped ? 'b' : 'w';
@@ -644,8 +641,8 @@ function updateClocks() {
 
 function render() {
   const b = G.s.b;
-  const chkSq = inCheck(G.s) ? kingSq(b, G.s.turn) : -1;
-  const rotAll = opts.flipPieces && G.s.turn === 'b';
+  const chkSq = inCheck(G.s) ? kingSq(b, G.s.turn) : -1
+  const rotAll = opts.flipPieces && !G.net && G.s.turn === 'b';
   const targets = new Set(G.sel >= 0 ? G.legal.filter(m => m.from === G.sel).map(m => m.to) : []);
   let html = '';
   for (let i = 0; i < 64; i++) {
@@ -659,7 +656,7 @@ function render() {
     let inner = '';
     if (i % 8 === 0) inner += `<span class="coord rk">${8 - r}</span>`;
     if (i >= 56) inner += `<span class="coord fl">${FILES_[c]}</span>`;
-    if (p) inner += pieceHTML(p, rotAll, opts.flipPieces && G.anim);   // every piece turns 180° while Black is to move
+    if (p) inner += pieceHTML(p, rotAll, opts.flipPieces && !G.net && G.anim);   // every piece turns 180° while Black is to move
     html += `<div class="${cls}" data-sq="${sq}">${inner}</div>`;
   }
   $('gsq').innerHTML = html;
@@ -783,37 +780,16 @@ document.addEventListener('keydown', e => {
   e.key === 'ArrowLeft' ? undoMove() : redoMove();
 });
 
-function onSquare(sq) {
-  if (G.over || G.paused || G.pending) return;
-  if (G.sel >= 0) {
-    const cands = G.legal.filter(m => m.from === G.sel && m.to === sq);
-    if (cands.length) { cands.length > 1 ? askPromo(cands) : doMove(cands[0]); return; }
-  }
-  const p = G.s.b[sq];
-  G.sel = (p && p[0] === G.s.turn && sq !== G.sel) ? sq : -1;
-  render();
-}
-$('gsq').addEventListener('click', e => {
-  const d = e.target.closest('.gsq');
-  if (d) onSquare(+d.dataset.sq);
-});
-
 const PROMO_NAME = { q: 'Queen', r: 'Rook', b: 'Bishop', n: 'Knight' };
-function askPromo(cands) {
-  G.pending = cands;
-  const col = G.s.turn;
-  $('promoBtns').innerHTML = cands.map(m =>
-    `<button type="button" class="pbtn ${col}" data-p="${m.promo}" aria-label="${PROMO_NAME[m.promo]}">${opts.pieces === 'classic' ? GLYPH[m.promo] : `<span class="pimg pc-${col}${m.promo.toUpperCase()}"></span>`}</button>`).join('');
-  $('promoOv').hidden = false;
-}
-$('promoBtns').addEventListener('click', e => {
+
+/*$('promoBtns').addEventListener('click', e => {
   const b = e.target.closest('.pbtn');
   const m = b && G.pending && G.pending.find(x => x.promo === b.dataset.p);
   if (m) doMove(m);
 });
 $('promoOv').addEventListener('click', e => {
   if (e.target === $('promoOv')) { G.pending = null; $('promoOv').hidden = true; }
-});
+});*/
 
 // { w: {p,n,b,r,q,k}, b: {...}, total: N } for a board array
 function countPieces(b) {
@@ -833,11 +809,12 @@ function scoreEvaluate() {
   const res = countPieces(G.s.b);
   let scoreEvaluation = 0;
   for (const t in PIECE_VALUE)                       // p, n, b, r, q, k
-    scoreEvaluation += (res.w[t] - res.b[t]) * PIECE_VALUE[t];   //TODO облегчить циклы на этапе сборки движка, это слишком много вычислений, возможно оптимизировать
+    scoreEvaluation += (res.w[t] - res.b[t]) * PIECE_VALUE[t];   //TODO optimize this part O(N^2) when you'll be writing a chess bot engine
   G.score = scoreEvaluation;
   return scoreEvaluation;   // without this `G.score = scoreEvaluate()` in doMove would overwrite the score with undefined
 }
 
+const move = m => (G.net ? netMove(m) : doMove(m));   // netMove lives in client.js
 function doMove(m) {
   tick();
   if (G.over) return;
@@ -856,7 +833,7 @@ function doMove(m) {
   if (!G.legal.length) {
     if (inCheck(next)) endGame(SIDE[mover] + ' wins', 'Checkmate');
     else endGame('Draw', 'Stalemate');
-  } else if (insufficient(next.b)) endGame('Draw', 'Insufficient material'); //TODO SCORE Обязан синхронизовываться с патами/матами, учти при тестах
+  } else if (insufficient(next.b)) endGame('Draw', 'Insufficient material');
   else if (next.half >= 100) endGame('Draw', 'Fifty-move rule');
   else if (G.seen[key] >= 3) endGame('Draw', 'Threefold repetition');
   G.hist.length = G.hi + 1;                       // a new move cuts off the redo branch
@@ -867,21 +844,15 @@ function doMove(m) {
 }
 
 function onSquare(sq) {
-  if (G.over || G.paused || G.pending) return;
+  if (G.over || G.paused || G.pending || !canAct()) return;
   if (G.sel >= 0) {
     const cands = G.legal.filter(m => m.from === G.sel && m.to === sq);
-    if (cands.length) { cands.length > 1 ? askPromo(cands) : doMove(cands[0]); return; }
+    if (cands.length) { cands.length > 1 ? askPromo(cands) : move(cands[0]); return; }
   }
   const p = G.s.b[sq];
   G.sel = (p && p[0] === G.s.turn && sq !== G.sel) ? sq : -1;
   render();
 }
-$('gsq').addEventListener('click', e => {
-  if (swallowClick) return;   // this click is the end of a drag, already handled
-  const d = e.target.closest('.gsq');
-  if (d) onSquare(+d.dataset.sq);
-});
-
 /* ---------- Drag & drop ---------- */
 // Hold the left button on your piece, move it with the cursor, release on a square it can go to.
 // Dropping anywhere else puts the piece back (it stays selected). Click-to-move still works.
@@ -909,7 +880,7 @@ function endDrag() {
 
 gsqEl.addEventListener('pointerdown', e => {
   if (drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
-  if (!G.s || G.over || G.paused || G.pending) return;
+  if (!G.s || G.over || G.paused || G.pending || !canAct()) return;
   const d = e.target.closest('.gsq');
   if (!d) return;
   const sq = +d.dataset.sq, p = G.s.b[sq];
@@ -951,7 +922,7 @@ gsqEl.addEventListener('pointerup', e => {
     return;
   }
   const cands = G.legal.filter(m => m.from === from && m.to === to);
-  if (cands.length) cands.length > 1 ? askPromo(cands) : doMove(cands[0]);
+  if (cands.length) cands.length > 1 ? askPromo(cands) : move(cands[0]);
 });
 
 gsqEl.addEventListener('pointercancel', endDrag);
@@ -966,7 +937,7 @@ function askPromo(cands) {
 $('promoBtns').addEventListener('click', e => {
   const b = e.target.closest('.pbtn');
   const m = b && G.pending && G.pending.find(x => x.promo === b.dataset.p);
-  if (m) doMove(m);
+  if (m) move(m);
 });
 $('promoOv').addEventListener('click', e => {
   if (e.target === $('promoOv')) { G.pending = null; $('promoOv').hidden = true; }
@@ -981,6 +952,7 @@ function tick() {
   G.clk[c] -= dt;
   if (G.clk[c] <= 0) {
     G.clk[c] = 0;
+    if (G.net) return;                 // online the server decides on time
     const w = c === 'w' ? 'b' : 'w';
     if (hasMating(G.s.b, w)) endGame(SIDE[w] + ' wins', SIDE[c] + ' ran out of time');
     else endGame('Draw', SIDE[c] + ' ran out of time, but ' + SIDE[w] + ' cannot checkmate');
@@ -1069,10 +1041,41 @@ themeBtns.addEventListener('click', e => {
 });
 
 // TODO (backend stage): replace with fetch('/api/players?nick=' + encodeURIComponent(nick))
-document.getElementById('searchForm').addEventListener('submit', e => {
+/*document.getElementById('searchForm').addEventListener('submit', e => {
   e.preventDefault();
   const nick = document.getElementById('nick').value.trim();
   statusEl.textContent = nick
     ? 'Player search isn’t connected yet. It arrives with the backend.'
     : 'Enter a nickname to search.';
-});
+});*/
+
+/*function showInvitePopup(inviteId, from) {
+  hideInvitePopup(inviteId);
+  const box = document.createElement('div');
+  box.id = `invite-${inviteId}`;
+  box.className = 'invite';
+
+  const text = document.createElement('span');
+  text.textContent = `${from} is inviting you for a game`;
+
+  const yes = document.createElement('button');
+  yes.textContent = 'Accept';
+  yes.addEventListener('click', () => {
+    send({ type: 'invite_response', inviteId, accept: true });
+    box.remove();
+  });
+
+  const no = document.createElement('button');
+  no.textContent = 'Decline';
+  no.addEventListener('click', () => {
+    send({ type: 'invite_response', inviteId, accept: false });
+    box.remove();
+  });
+
+  box.append(text, yes, no);
+  document.body.append(box);
+}
+
+function hideInvitePopup(inviteId) {
+  document.getElementById(`invite-${inviteId}`)?.remove();
+}*/

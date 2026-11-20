@@ -8,6 +8,7 @@
 <script src="/gamesBase/games.js" defer></script>
 <script src="/gamesBase/gamesReader.js" defer></script>
 <script src="script.js" defer></script>
+<script src="client.js" defer></script>
 <title>Chessy — play chess in your browser</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -37,10 +38,10 @@
         <span class="wordmark">Chessy</span>
       </a>
     </div>
-    <nav aria-label="Main">
-      <a href="#" id="navPlay">Play</a>
-      <a href="#learn">Learn</a>
-    </nav>
+<div class="hright">
+  <nav aria-label="Main"><a href="#learn">Learn</a></nav>
+  <button class="acct" id="acctBtn" type="button">Register</button>
+</div>
   </header>
 
   <div class="backdrop" id="backdrop"></div>
@@ -211,21 +212,48 @@
     </div>
   </dialog>
 
-  <!-- Play dialog: matchmaking + nickname search (UI only for now) -->
+      <!-- Play dialog: registration, matchmaking, invitations -->
   <dialog id="playDialog" aria-labelledby="playTitle">
     <div class="dlg">
       <div class="dlg-head">
         <h3 id="playTitle">Play online</h3>
         <button class="x" type="button" id="closeDlg" aria-label="Close">×</button>
       </div>
-      <button class="btn primary" type="button" id="findBtn" style="font-size:1.2rem;padding:16px">Find opponent</button>
-      <div class="divider">or</div>
-      <form class="search" id="searchForm" autocomplete="off">
-        <input id="nick" type="search" placeholder="Search player by nickname" maxlength="24" aria-label="Nickname">
-        <button class="btn secondary" type="submit">Search</button>
+      <div class="conn" id="connState" role="status"></div>
+
+      <!-- shown until a nickname is registered -->
+      <form class="stack" id="regForm" autocomplete="off" hidden>
+        <p class="note">Pick a nickname to play online. No password needed.</p>
+        <div class="search">
+          <input id="regNick" type="text" placeholder="Your nickname" maxlength="16" aria-label="Your nickname">
+          <button class="btn primary" type="submit">Continue</button>
+        </div>
+        <details class="link-in">
+          <summary>Already playing on another device?</summary>
+          <div class="search">
+            <input id="linkCode" type="text" placeholder="Link code" maxlength="9" aria-label="Link code">
+            <button class="btn secondary" type="button" id="redeemBtn">Use code</button>
+          </div>
+        </details>
       </form>
+
+      <div class="stack" id="lobby" hidden>
+        <div class="me">
+          <span>Playing as <b id="meNick"></b></span>
+          <button class="linkbtn" type="button" id="linkBtn">Link device</button>
+        </div>
+        <div class="tiles sm" id="olTc"></div>
+        <button class="btn primary" type="button" id="findBtn" style="font-size:1.2rem;padding:16px">Find opponent</button>
+        <div class="divider">or</div>
+        <form class="search" id="searchForm" autocomplete="off">
+          <input id="nick" type="search" placeholder="Invite player by nickname" maxlength="16" aria-label="Nickname">
+          <button class="btn secondary" type="submit" id="inviteBtn">Invite</button>
+        </form>
+      </div>
+
       <div class="status" id="status" role="status" aria-live="polite"></div>
     </div>
+
   </dialog>
 
 </body>
