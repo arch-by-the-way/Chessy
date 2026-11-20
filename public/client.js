@@ -175,7 +175,7 @@ function onGame(m) {
 function beginOnline(m) {
   setBusy(null);
   outInviteId = null;
-  document.querySelectorAll('.invite').forEach((b) => b.remove());
+  clearInvites();
   if (dlg.open) dlg.close();
   if (gSet.open) gSet.close();
   setMenu(false);
@@ -246,6 +246,55 @@ $('optFlip').addEventListener('change', () => {
 });
 
 /* ---------- invitation popup ---------- */
+/* ---------- invitation popups: stacked; the oldest fold into an "Invites" row ---------- */
+const invStack = document.createElement('div');
+invStack.id = 'invite-stack';
+invStack.className = 'invite-stack';
+invStack.innerHTML = `
+  <div class="invite-sum" hidden>
+    <button type="button" class="invite-sumbtn" aria-expanded="false">
+      <span>Invites</span><b class="n"></b>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="invite-sumlist"></div>
+  </div>`;
+const invSum = invStack.firstElementChild;
+const invSumBtn = invSum.querySelector('button');
+const invList = invSum.querySelector('.invite-sumlist');
+
+invSumBtn.addEventListener('click', () => {
+  const open = invSum.classList.toggle('open');
+  invSumBtn.setAttribute('aria-expanded', open);
+});
+
+function layoutInvites() {
+  const boxes = [...invStack.querySelectorAll('.invite')];      // DOM order = arrival order, oldest first
+  const wasOpen = invSum.classList.contains('open');
+  invSum.classList.remove('open');                               // measure with the list closed
+  invSum.hidden = true;
+  invStack.append(...boxes);                                     // start with everything expanded
+  const limit = innerHeight * 0.5;
+  let folded = 0;
+  while (folded < boxes.length - 1 && invStack.getBoundingClientRect().bottom > limit) {
+    invList.append(boxes[folded++]);                             // fold the oldest one
+    invSum.hidden = false;
+  }
+  invSum.hidden = folded === 0;
+  invSum.querySelector('.n').textContent = folded || '';
+  invSum.classList.toggle('open', wasOpen && folded > 0);
+  invSumBtn.setAttribute('aria-expanded', invSum.classList.contains('open'));
+}
+
+// while the play dialog is open (top layer) the stack must live inside it, otherwise it is hidden behind it
+function mountInvites() {
+  const host = dlg.open ? dlg.querySelector('.dlg') : document.body;
+  if (invStack.parentNode !== host) host.append(invStack);
+  layoutInvites();
+}
+new MutationObserver(mountInvites).observe(dlg, { attributes: true, attributeFilter: ['open'] });
+addEventListener('resize', layoutInvites);
+mountInvites();
+
 function showInvitePopup(inviteId, from, min, inc) {
   hideInvitePopup(inviteId);
   const box = document.createElement('div');
@@ -258,17 +307,23 @@ function showInvitePopup(inviteId, from, min, inc) {
 
   const yes = document.createElement('button');
   yes.type = 'button'; yes.className = 'btn primary'; yes.textContent = 'Accept';
-  yes.addEventListener('click', () => { send({ type: 'invite_response', inviteId, accept: true }); box.remove(); });
+  yes.addEventListener('click', () => { send({ type: 'invite_response', inviteId, accept: true }); hideInvitePopup(inviteId); });
 
   const no = document.createElement('button');
   no.type = 'button'; no.className = 'btn secondary'; no.textContent = 'Decline';
-  no.addEventListener('click', () => { send({ type: 'invite_response', inviteId, accept: false }); box.remove(); });
+  no.addEventListener('click', () => { send({ type: 'invite_response', inviteId, accept: false }); hideInvitePopup(inviteId); });
 
   box.append(text, yes, no);
-  (dlg.open ? dlg.querySelector('.dlg') : document.body).append(box);
+  invStack.append(box);
+  mountInvites();
 }
 function hideInvitePopup(inviteId) {
   document.getElementById(`invite-${inviteId}`)?.remove();
+  layoutInvites();
+}
+function clearInvites() {
+  invStack.querySelectorAll('.invite').forEach((b) => b.remove());
+  layoutInvites();
 }
 
 /* ---------- play dialog ---------- */
@@ -343,7 +398,6 @@ dlg.addEventListener('close', () => {
   if (netBusy) send({ type: 'cancel' });
   outInviteId = null;
   setBusy(null);
-  document.querySelectorAll('.invite').forEach((b) => document.body.append(b));
 });
 
 /* ---------- live nickname check (500 ms after the last keystroke) ---------- */
