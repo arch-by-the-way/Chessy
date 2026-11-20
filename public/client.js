@@ -1,4 +1,4 @@
-const URL_WS = 'wss://cchess-chessy.up.railway.app/ws';
+const URL_WS = 'wss://chess-chessy.up.railway.app/ws';
 const KEY = 'session';
 const TTL = 60_000;
 
