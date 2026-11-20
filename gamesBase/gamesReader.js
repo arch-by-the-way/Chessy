@@ -1,29 +1,29 @@
 /* games-reader.js — читает games.json и выдаёт партии по уникальному ID.
  *
- * Подключение:   <script src="games-reader.js"></script>
- * Использование: const reader = await GamesReader.load('games.json');
+ * Include:  <script src="games-reader.js"></script>
+ * Usage:    const reader = await GamesReader.load('games.json');
  *
- *   reader.IDs                      -> [1, 2, 3, … N]   (ID назначаются читателем по порядку в файле)
+ *   reader.IDs                      -> [1, 2, 3, … N]   (IDs are assigned by the reader in file order)
  *   reader.size                     -> N
  *   reader.has(id)                  -> true / false
  *   reader.get(id)                  -> { id, title, white, black, event, year, result, category, note,
  *                                        uci: ['e2e4', …], plies: [ply, …] }
- *   reader.randomID(min, max, excl) -> случайный существующий ID из [min, max], без excl (или null)
- *   reader.pickDistinct(n, excl)    -> n РАЗНЫХ случайных ID (меньше n, если партий не хватает)
- *   reader.freeIDs(busy)            -> все ID, кроме занятых
- *   reader.byCategory(cat)          -> ID партий категории 'historic' | 'miniature' | 'opening'
+ *   reader.randomID(min, max, excl) -> random existing ID from [min, max], excluding excl (or null)
+ *   reader.pickDistinct(n, excl)    -> n DISTINCT random IDs (fewer than n if there aren't enough games)
+ *   reader.freeIDs(busy)            -> all IDs except the busy ones
+ *   reader.byCategory(cat)          -> IDs of games in category 'historic' | 'miniature' | 'opening'
  *
- * Каждый ply (полуход) уже «разобран» под анимацию доски:
+ * Each ply (half-move) is already "parsed" for board animation:
  *   { from:'e1', to:'g1', piece:'k', color:'w', capture:false,
- *     promo:null,            // 'q' | 'r' | 'b' | 'n' при превращении пешки
- *     castle:['h1','f1'],    // [откуда, куда] для ладьи при рокировке, иначе null
- *     enPassant:'e5' }       // поле взятой пешки при взятии на проходе, иначе null
+ *     promo:null,            // 'q' | 'r' | 'b' | 'n' on pawn promotion
+ *     castle:['h1','f1'],    // [from, to] for the rook when castling, otherwise null
+ *     enPassant:'e5' }       // square of the captured pawn on en passant, otherwise null
  *
- * ID уникальны и стабильны, пока порядок партий в games.json не меняется — новые партии
- * дописывайте в КОНЕЦ файла.
+ * IDs are unique and stable as long as the order of games in games.json doesn't change — append
+ * new games to the END of the file.
  *
- * Если страница открыта прямо с диска (file://), fetch() блокируется браузером. Тогда читатель
- * берёт данные из window.CHESS_GAMES (файл games.js, см. ниже), если он подключён.
+ * If the page is opened straight from disk (file://), the browser blocks fetch(). In that case the
+ * reader takes data from window.CHESS_GAMES (the games.js file, see below), if it's included.
  */
 (function (root) {
   'use strict';

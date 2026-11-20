@@ -31,15 +31,14 @@ function connect() {
     if (msg.type === 'error' && msg.reason === 'bad_token') {
       localStorage.removeItem(KEY); token = null; showRegisterForm();
     }
-    // остальные типы как раньше
   };
 
-  ws.onclose = () => {                       // автопереподключение с backoff
+  ws.onclose = () => {                       // autoretry with backoff
     setTimeout(connect, Math.min(1000 * 2 ** retry++, 10_000));
   };
 }
 
-// «Последний раз видели»: пока сокет жив, раз в 5 с обновляем метку времени.
+// updating timestamps every 5 seconds
 setInterval(() => {
   if (token && ws?.readyState === WebSocket.OPEN) saveToken(token);
 }, 5_000);

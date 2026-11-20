@@ -30,7 +30,7 @@ function issueToken(userId) {
 
 function attach(ws, userId) {
   const user = users.get(userId);
-  clearTimeout(user.timer);            // отмена отложенного удаления
+  clearTimeout(user.timer);            // cancelling delayed deletion
   user.timer = null;
   user.sockets.add(ws);
   ws.userId = userId;
@@ -46,7 +46,7 @@ function removeUser(userId) {
   users.delete(userId);
 }
 
-// HTTP-сервер нужен для healthcheck Railway (/health) и для WS upgrade
+// HTTP-сервер is mandatory for Railway (/health) and WS upgrade
 const server = createServer((req, res) => {
   if (req.url === '/health') { res.writeHead(200); return res.end('ok'); }
   res.writeHead(404); res.end();
@@ -66,7 +66,7 @@ wss.on('connection', (ws) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
-    // Регистрация
+    // Registration
     if (msg.type === 'register' && !ws.userId) {
       const nick = String(msg.nick ?? '').trim();
       const nickNorm = normNick(nick);
@@ -82,7 +82,7 @@ wss.on('connection', (ws) => {
       return send({ type: 'registered', nick, token: issueToken(userId) });
     }
 
-    // Возобновление после F5 / обрыва
+    // reloading after F5 / page update
     if (msg.type === 'resume' && !ws.userId) {
       const userId = tokenIndex.get(sha256(String(msg.token ?? '')));
       if (!userId || !users.has(userId)) {
@@ -93,7 +93,7 @@ wss.on('connection', (ws) => {
       return send({ type: 'registered', nick: users.get(userId).nick, token: msg.token });
     }
 
-    // Код для привязки другого устройства
+    // Code for pairing another device
     if (msg.type === 'create_link_code' && ws.userId) {
       const code = makeCode();
       linkCodes.set(code, { userId: ws.userId, expires: Date.now() + 2 * 60_000 });
@@ -101,7 +101,7 @@ wss.on('connection', (ws) => {
       return send({ type: 'link_code', code });
     }
 
-    // Новое устройство вводит код
+    // New device enters code
     if (msg.type === 'redeem' && !ws.userId) {
       const code = String(msg.code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
       const entry = linkCodes.get(code);
@@ -127,10 +127,10 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Heartbeat: ping каждые 15 с, кто не ответил с прошлого раза, того закрываем
+// Heartbeat: ping every 15s, we close those who haven't answered the last time
 const hb = setInterval(() => {
   for (const ws of wss.clients) {
-    if (!ws.isAlive) { ws.terminate(); continue; }  // terminate вызовет 'close'
+    if (!ws.isAlive) { ws.terminate(); continue; }  // terminate will let out 'close'
     ws.isAlive = false;
     ws.ping();
   }
@@ -138,7 +138,7 @@ const hb = setInterval(() => {
 wss.on('close', () => clearInterval(hb));
 server.listen(PORT, '0.0.0.0', () => console.log(`listening on :${PORT}`));
 
-// Корректное завершение при деплое (Railway шлёт SIGTERM)
+// graceful shutdown (Railway lets out SIGTERM)
 process.on('SIGTERM', () => {
   clearInterval(hb);
   for (const ws of wss.clients) ws.close(1001, 'server restarting');
