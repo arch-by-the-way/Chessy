@@ -447,7 +447,7 @@ if (msg.type === 'friend_add' || msg.type === 'friend_remove') {
       for (const [iid, inv] of invites) if (inv.from === id) closeInvite(iid, 'cancelled');
       const g = games.get(user.gameId);
       if (g) sendToUser(other(g, id), { type: 'opp_status', online: false });
-      user.timer = setTimeout(() => removeUser(id), GRACE_MS);
+      user.timer = setTimeout(() => dropSession(id), GRACE_MS);
     }
   });
 });
