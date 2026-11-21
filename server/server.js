@@ -3,15 +3,23 @@ import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import crypto from 'node:crypto';
 
+
 const PORT = Number(process.env.PORT) || 8080;
 const HEARTBEAT_MS = 15_000;
 const GRACE_MS = 60_000;
 const INVITE_TTL = 30_000;
 const MAX_CLIENTS = 76;
+
+import fs from 'node:fs';
+import path from 'node:path';
+const DATA_DIR = process.env.DATA_DIR || './data';   // on Railway: mount a Volume and set DATA_DIR=/data
+const DB_FILE = path.join(DATA_DIR, 'accounts.json');
+const HISTORY_MAX = 50;
+const MOCK_ELO = 1200;                                // TODO: real rating
 // comma-separated list in the Railway variable ALLOWED_ORIGINS, e.g. https://my-site.netlify.app
 const ALLOWED = new Set((process.env.ALLOWED_ORIGINS || 'https://chess-chessy.app').split(',').map((s) => s.trim()));
 
-const users = new Map();       // userId -> { nick, nickNorm, sockets:Set, tokens:Set, timer, gameId }
+const users = new Map();       // userId -> { nick, nickNorm, avatar, friends:Set, history:[], sockets:Set, tokens:Set, timer, gameId }
 const nickIndex = new Map();   // nickNorm -> userId
 const tokenIndex = new Map();  // sha256(token) -> userId
 const linkCodes = new Map();   // code -> { userId, expires }
@@ -31,6 +39,7 @@ const validTc = (min, inc) =>
   Number.isInteger(min) && Number.isInteger(inc) && min >= 1 && min <= 180 && inc >= 0 && inc <= 180;
 const nickOf = (id) => users.get(id)?.nick;
 const inGame = (id) => !!users.get(id)?.gameId;
+const isOnline = (id) => (users.get(id)?.sockets.size ?? 0) > 0;
 const other = (g, id) => (g.white === id ? g.black : g.white);
 
 function sendToUser(id, obj) {
@@ -39,14 +48,63 @@ function sendToUser(id, obj) {
   const s = JSON.stringify(obj);
   for (const ws of u.sockets) if (ws.readyState === ws.OPEN) ws.send(s);
 }
-function rateOk(ws, key = 'hits', limit = 20) {      // 20 messages per 10 s for the "expensive" commands
-  const now = Date.now();
+function rateOk(ws, key = 'hits', limit = 20) {   // `limit` messages per 10 s, a separate counter per key
+  const now = Date.now();                        // 20 messages per 10 s for the "expensive" commands
   ws[key] = (ws[key] || []).filter((t) => now - t < 10_000);
   if (ws[key].length >= limit) return false;
   ws[key].push(now);
   return true;
 }
 const unqueue = (id) => { const i = queue.findIndex((q) => q.userId === id); if (i >= 0) queue.splice(i, 1); };
+
+/* ---------- persistence (accounts, friends, history) ---------- */
+const AVATAR_PIECES = 'pnbrqk';
+const makeAvatar = () => ({ h: crypto.randomInt(360), p: AVATAR_PIECES[crypto.randomInt(AVATAR_PIECES.length)] });
+
+function loadDb() {
+  let db;
+  try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
+  catch (e) { if (e.code !== 'ENOENT') console.error('db load failed:', e); return; }
+  for (const a of db.accounts || []) {
+    users.set(a.id, {
+      nick: a.nick, nickNorm: normNick(a.nick), avatar: a.avatar || makeAvatar(),
+      friends: new Set(a.friends || []), history: a.history || [], tokens: new Set(a.tokens || []),
+      sockets: new Set(), timer: null, gameId: null,
+    });
+    nickIndex.set(normNick(a.nick), a.id);
+    for (const h of a.tokens || []) tokenIndex.set(h, a.id);
+  }
+  console.log(`loaded ${users.size} accounts`);
+}
+function writeDb() {
+  const accounts = [...users].map(([id, u]) => ({
+    id, nick: u.nick, avatar: u.avatar, friends: [...u.friends], history: u.history, tokens: [...u.tokens],
+  }));
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(DB_FILE + '.tmp', JSON.stringify({ accounts }));
+    fs.renameSync(DB_FILE + '.tmp', DB_FILE);          // atomic: never a half-written file
+  } catch (e) { console.error('db save failed:', e); }
+}
+let saveTimer = null;
+const save = () => { saveTimer ??= setTimeout(() => { saveTimer = null; writeDb(); }, 1000); };
+loadDb();
+
+function recordHistory(g, reason, winner) {            // called once per finished game
+  if (g.moves.length < 2) return;                      // aborted games are not recorded
+  const at = Date.now();
+  for (const id of [g.white, g.black]) {
+    const u = users.get(id);
+    if (!u) continue;
+    const color = id === g.white ? 'w' : 'b';
+    u.history.unshift({
+      opp: other(g, id), color, res: !winner ? 'draw' : winner === color ? 'win' : 'loss',
+      reason, min: g.min, inc: g.inc, plies: g.moves.length, at,
+    });
+    if (u.history.length > HISTORY_MAX) u.history.length = HISTORY_MAX;
+  }
+  save();
+}
 
 /* ---------- invites ---------- */
 function closeInvite(id, reason) {
@@ -92,6 +150,7 @@ function endGame(gameId, reason, winner = null) {   // winner: 'w' | 'b' | null 
   const g = games.get(gameId);
   if (!g) return;
   clearTimeout(g.flag);
+  recordHistory(g, reason, winner);
   games.delete(gameId);
   for (const id of [g.white, g.black]) {
     const u = users.get(id);
@@ -99,6 +158,7 @@ function endGame(gameId, reason, winner = null) {   // winner: 'w' | 'b' | null 
     sendToUser(id, { type: 'game_end', reason, winner });
   }
 }
+
 function armFlag(gameId, g) {               // the side to move loses on time if it doesn't move
   clearTimeout(g.flag);
   if (g.moves.length < 2) return;           // the clocks start after both first moves
@@ -112,10 +172,14 @@ function armFlag(gameId, g) {               // the side to move loses on time if
 function issueToken(userId) {
   const token = crypto.randomBytes(32).toString('base64url');
   const hash = sha256(token);
-  users.get(userId).tokens.add(hash);
+  const tokens = users.get(userId).tokens;
+  tokens.add(hash);
   tokenIndex.set(hash, userId);
+  if (tokens.size > 10) { const old = tokens.values().next().value; tokens.delete(old); tokenIndex.delete(old); }   // keep the 10 newest devices
+  save();
   return token;
 }
+
 function attach(ws, userId) {
   const user = users.get(userId);
   clearTimeout(user.timer);                 // cancel delayed deletion
@@ -128,18 +192,17 @@ function attach(ws, userId) {
     sendToUser(other(g, userId), { type: 'opp_status', online: true });
   }
 }
-function removeUser(userId) {
+
+function dropSession(userId) {              // the player has been offline for GRACE_MS; the account itself stays
   const user = users.get(userId);
   if (!user) return;
   clearTimeout(user.timer);
+  user.timer = null;
   unqueue(userId);
-  for (const h of user.tokens) tokenIndex.delete(h);
   for (const [c, e] of linkCodes) if (e.userId === userId) linkCodes.delete(c);
-  nickIndex.delete(user.nickNorm);
   const g = games.get(user.gameId);
   if (g) endGame(user.gameId, 'opponent_left', g.white === userId ? 'b' : 'w');
   for (const [id, inv] of invites) if (inv.from === userId || inv.to === userId) closeInvite(id, 'cancelled');
-  users.delete(userId);
 }
 
 /* ---------- HTTP + WS ---------- */
@@ -184,7 +247,10 @@ wss.on('connection', (ws) => {
       if (!validNick(nick) || RESERVED.has(nickNorm)) return send({ type: 'error', reason: 'bad_nick' });
       if (nickIndex.has(nickNorm)) return send({ type: 'error', reason: 'nick_taken' });
       const userId = crypto.randomUUID();
-      users.set(userId, { nick, nickNorm, sockets: new Set(), tokens: new Set(), timer: null, gameId: null });
+      users.set(userId, {
+      nick, nickNorm, avatar: makeAvatar(), friends: new Set(), history: [],
+      sockets: new Set(), tokens: new Set(), timer: null, gameId: null, 
+      });
       nickIndex.set(nickNorm, userId);
       attach(ws, userId);
       return send({ type: 'registered', nick, token: issueToken(userId) });
@@ -225,8 +291,49 @@ wss.on('connection', (ws) => {
     if (!rateOk(ws, 'chk', 30)) return;                 // silent: this is only a UI hint
     const nick = String(msg.nick ?? '');
     const id = validNick(nick.trim()) ? nickIndex.get(normNick(nick)) : null;
-    return send({ type: 'nick_status', nick, found: !!id && id !== ws.userId });
+    return send({ type: 'nick_status', nick, found: !!id && id !== ws.userId && isOnline(id) });
   }
+
+  /* ----- friends & profiles ----- */
+if (msg.type === 'friends_list') {
+  if (!rateOk(ws, 'fl', 20)) return;
+  const list = [...users.get(ws.userId).friends].filter((id) => users.has(id)).map((id) => {
+    const u = users.get(id);
+    return { nick: u.nick, avatar: u.avatar, online: isOnline(id), busy: inGame(id) };
+  }).sort((a, b) => b.online - a.online || a.nick.localeCompare(b.nick));
+  return send({ type: 'friends', list });
+}
+
+if (msg.type === 'profile_get') {
+  if (!rateOk(ws, 'pr', 30)) return;
+  const nick = String(msg.nick ?? '');
+  const id = nickIndex.get(normNick(nick));
+  const u = users.get(id);
+  if (!u) return send({ type: 'profile', nick, missing: true });
+  return send({
+    type: 'profile', nick: u.nick, avatar: u.avatar, elo: MOCK_ELO,
+    online: isOnline(id), busy: inGame(id),
+    self: id === ws.userId, friend: users.get(ws.userId).friends.has(id),
+    history: u.history.map((h) => {
+      const o = users.get(h.opp);
+      return { ...h, opp: o?.nick ?? '?', oppAvatar: o?.avatar };
+    }),
+  });
+}
+
+if (msg.type === 'friend_add' || msg.type === 'friend_remove') {
+  if (!rateOk(ws, 'fr', 20)) return send({ type: 'error', reason: 'rate_limited' });
+  const id = nickIndex.get(normNick(msg.nick ?? ''));
+  if (!id || id === ws.userId) return;
+  const me = users.get(ws.userId), them = users.get(id);
+  const add = msg.type === 'friend_add';
+  if (add) { me.friends.add(id); them.friends.add(ws.userId); }        // friendship is mutual
+  else { me.friends.delete(id); them.friends.delete(ws.userId); }
+  save();
+  sendToUser(ws.userId, { type: 'friend_changed', nick: them.nick, friend: add, by: 'you' });
+  sendToUser(id, { type: 'friend_changed', nick: me.nick, friend: add, by: 'them' });
+  return;
+}
 
     /* ----- matchmaking ----- */
     if (msg.type === 'find') {
@@ -258,7 +365,7 @@ wss.on('connection', (ws) => {
       const min = Number(msg.min), inc = Number(msg.inc);
       if (!validTc(min, inc)) return send({ type: 'error', reason: 'bad_tc' });
       const toId = nickIndex.get(normNick(msg.to ?? ''));
-      if (!toId) return send({ type: 'error', reason: 'no_such_user' });
+      if (!toId || !isOnline(toId)) return send({ type: 'error', reason: 'no_such_user' });
       if (toId === ws.userId) return send({ type: 'error', reason: 'self_invite' });
       if (inGame(toId)) return send({ type: 'error', reason: 'user_busy' });
       for (const [id, inv] of invites) if (inv.from === ws.userId) closeInvite(id, 'cancelled');
@@ -359,6 +466,7 @@ server.listen(PORT, '0.0.0.0', () => console.log(`listening on :${PORT}`));
 // graceful shutdown (Railway sends SIGTERM)
 process.on('SIGTERM', () => {
   clearInterval(hb);
+  writeDb();
   for (const ws of wss.clients) ws.close(1001, 'server restarting');
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5_000).unref();

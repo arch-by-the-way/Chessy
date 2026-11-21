@@ -253,8 +253,40 @@
 
       <div class="status" id="status" role="status" aria-live="polite"></div>
     </div>
-
   </dialog>
+
+    <!-- ===== Friends ===== -->
+  <section class="screen" id="friendsScreen" hidden aria-label="Friends">
+    <div class="s-top">
+      <button class="s-back" id="frBack" type="button" aria-label="Back">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M10 6 4 12l6 6M4 12h16"/></svg>
+      </button>
+      <h1>Friends</h1>
+      <button class="linkbtn" id="frMe" type="button">My profile</button>
+    </div>
+    <div class="s-body">
+      <div class="s-inner">
+        <form class="search fr-search" id="frSearch" autocomplete="off">
+          <input id="frNick" type="search" placeholder="Find a player by nickname" maxlength="16" aria-label="Nickname">
+          <button class="btn secondary" type="submit">Open</button>
+        </form>
+        <div id="frList"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Profile ===== -->
+  <section class="screen" id="profileScreen" hidden aria-label="Profile">
+    <div class="s-top">
+      <button class="s-back" id="pfBack" type="button" aria-label="Back">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M10 6 4 12l6 6M4 12h16"/></svg>
+      </button>
+      <h1>Profile</h1>
+    </div>
+    <div class="s-body">
+      <div class="s-inner wide" id="pfBody"></div>
+    </div>
+  </section>
 
 </body>
 </html>

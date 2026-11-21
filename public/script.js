@@ -247,14 +247,14 @@ const MENU = [
   { group: 'Improve', items: [
     { id: 'problems', icon: '♘', title: 'Problems',  sub: 'Solve chess puzzles' },
     { id: 'learn',    icon: '♗', title: 'Lessons',   sub: 'Rules, tactics and strategy' },
-    { id: 'openings', icon: '♖', title: 'Openings',  sub: 'Learn the first moves' },
+    { id: 'openings', icon: '♖', title: 'Openings',  sub: 'Learn openings' },
     { id: 'analysis', icon: '◎', title: 'Analysis',  sub: 'Review your games with the engine' },
   ]},
   { group: 'Community', items: [
-    { id: 'leaders', icon: '♕', title: 'Leaderboard', sub: 'Top players this week' },
+    { id: 'leaders', icon: '♕', title: 'Leaderboard', sub: 'Top players' },
     { id: 'watch',   icon: '◉', title: 'Watch',       sub: 'Live games from other players' },
     { id: 'friends', icon: '☺', title: 'Friends',     sub: 'Find players by nickname' },
-    { id: 'themes',  icon: '◐', title: 'Themes',      sub: 'Boards, pieces and colors' },
+    { id: 'themes',  icon: '◐', title: 'Themes',      sub: 'Boards and pieces style' },
   ]},
 ];
 
@@ -303,6 +303,7 @@ drawer.addEventListener('click', e => {
   setMenu(false);
   if (id === 'play') { setTimeout(() => openPlay(), 200); return; }
   if (id === 'inperson') { setTimeout(() => openTimeScreen(), 200); return; }
+  if (id === 'friends') { setTimeout(() => openFriends(), 200); return; }
   if (QUICK[id]) { setTimeout(() => openPlay(null, QUICK[id]), 200); return; }
   // TODO: route to real pages once they exist (e.g. location.href = '/' + id)
   const title = btn.querySelector('.mi-title').textContent;

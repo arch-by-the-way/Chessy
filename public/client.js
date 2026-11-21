@@ -2,19 +2,14 @@
 /* Loaded AFTER script.js. Local game code in script.js is untouched; online games use netMove() below. */
 const URL_WS = 'wss://chess-chessy.up.railway.app/ws';
 const KEY = 'session';
-const TTL = 60_000;
+//const TTL = 60_000;
 
 G.net = null;      // null = local game, { gameId, color, me, opponent } = online game
 
 const loadToken = () => {
-  try {
-    const s = JSON.parse(localStorage.getItem(KEY));
-    if (s && Date.now() - s.seen < TTL) return s.token;
-  } catch {}
-  localStorage.removeItem(KEY);
-  return null;
+  try { return JSON.parse(localStorage.getItem(KEY))?.token ?? null; } catch { return null; }
 };
-const saveToken = (t) => { try { localStorage.setItem(KEY, JSON.stringify({ token: t, seen: Date.now() })); } catch {} };
+const saveToken = (t) => { try { localStorage.setItem(KEY, JSON.stringify({ token: t })); } catch {} };
 
 let ws = null, retry = 0, retryTimer = null, token = null, myNick = null;
 let netBusy = null;                    // null | 'search' | 'invite'
@@ -28,7 +23,7 @@ function send(o) {
 }
 // can the local player touch the board right now? (always true in a local game)
 const canAct = () => !G.net || (G.s.turn === G.net.color && wsOpen());
-const say = (t) => { statusEl.textContent = t; };
+const say = (t) => { statusEl.textContent = t; if (t && !dlg.open) toast(t); };
 
 /* ---------- connection ---------- */
 function connect() {
@@ -50,7 +45,7 @@ function connect() {
     retryTimer = setTimeout(connect, Math.min(1000 * 2 ** retry++, 10_000));
   };
 }
-setInterval(() => { if (token && wsOpen()) saveToken(token); }, 5_000);
+//setInterval(() => { if (token && wsOpen()) saveToken(token); }, 5_000);
 if (loadToken()) connect();
 
 /* ---------- incoming messages ---------- */
@@ -87,6 +82,9 @@ function onNet(raw) {
     case 'game_end':     onNetEnd(m); break;
     case 'opp_status':   if (G.net && !G.over) toast(m.online ? 'Opponent is back' : 'Opponent disconnected. Waiting up to 60 s…'); break;
     case 'nick_status': onNickStatus(m); break;
+    case 'friends':        renderFriends(m.list); break;
+    case 'profile':        onProfile(m); break;
+    case 'friend_changed': onFriendChanged(m); break;
   }
 }
 
@@ -170,6 +168,7 @@ function onGame(m) {
   const same = G.net && G.net.gameId === m.gameId && !gameScreen.hidden;
   if (m.type === 'game_sync' && same && G.moves === m.moves.length) { setClocks(m.clk); return; }
   beginOnline(m);
+  hideSocial();
 }
 
 function beginOnline(m) {
@@ -419,3 +418,170 @@ function onNickStatus(m) {
   // ignore stale answers: the field may have changed while the request was in flight
   if (normNickC(m.nick) === normNickC(nickEl.value)) markFound(m.found && !netBusy);
 }
+
+/* ======================= Friends & profiles ======================= */
+const friendsScreen = $('friendsScreen'), profileScreen = $('profileScreen');
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sameNick = (a, b) => String(a).normalize('NFKC').trim().toLowerCase() === String(b).normalize('NFKC').trim().toLowerCase();
+const syncLock = () => { lockScroll(); if (!friendsScreen.hidden || !profileScreen.hidden) document.body.style.overflow = 'hidden'; };
+
+const ICON = {
+  swords: '<svg class="ic" viewBox="0 0 24 24"><path d="M4 4l16 16M20 4L4 20M13.5 18.5l5-5M10.5 18.5l-5-5"/></svg>',
+  chat: '<svg class="ic" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>',
+  addUser: '<svg class="ic" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M19 8v6M16 11h6"/></svg>',
+  delUser: '<svg class="ic" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M17 9l5 5M22 9l-5 5"/></svg>',
+};
+const REASON = {
+  checkmate: 'Checkmate', stalemate: 'Stalemate', insufficient: 'Insufficient material', fifty: 'Fifty-move rule',
+  repetition: 'Repetition', resign: 'Resignation', timeout: 'On time', opponent_left: 'Opponent left',
+};
+
+// the avatar is a coloured disc with a piece; colour and piece are chosen once by the server when the nickname is created
+const avatarHTML = (av, cls = '') => {
+  const a = av || { h: 0, p: 'p' };
+  return `<span class="av ${cls}" style="--h:${a.h | 0}" aria-hidden="true">${GLYPH[a.p] || GLYPH.p}</span>`;
+};
+const ago = (t) => {
+  const s = (Date.now() - t) / 1000;
+  return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : `${Math.floor(s / 86400)} d ago`;
+};
+
+function inviteNick(nick) {                      // crossed-swords button: invite with the time control chosen in the Play dialog
+  outInviteTo = nick;
+  if (!send({ type: 'invite', to: nick, min: olSel[0], inc: olSel[1] })) toast('Not connected to the server yet.');
+}
+function hideSocial() {                          // a game is starting: both screens must go away
+  friendsScreen.hidden = true; profileScreen.hidden = true;
+  pfStack.length = 0; pfNick = null; pfData = null;
+  syncLock();
+}
+
+/* ---------- friends list ---------- */
+function openFriends() {
+  if (!myNick) { openPlay(); say('Register to use Friends.'); return; }
+  friendsScreen.hidden = false; syncLock();
+  send({ type: 'friends_list' });
+}
+function renderFriends(list) {
+  $('frList').innerHTML = list.length ? list.map((f) => {
+    const can = f.online && !f.busy;
+    return `<div class="fr-row" data-nick="${esc(f.nick)}">
+      <button type="button" class="fr-open">
+        <span class="av-wrap">${avatarHTML(f.avatar, 'm')}<i class="dot${f.online ? ' on' : ''}"></i></span>
+        <span class="fr-main"><b>${esc(f.nick)}</b><small>${f.busy ? 'In a game' : f.online ? 'Online' : 'Offline'}</small></span>
+      </button>
+      <button type="button" class="ic-btn go" data-act="invite" title="${can ? `Invite to ${olSel[0]}+${olSel[1]}` : 'Not available right now'}" aria-label="Invite ${esc(f.nick)} to a game"${can ? '' : ' disabled'}>${ICON.swords}</button>
+      <button type="button" class="ic-btn" data-act="chat" title="Chat" aria-label="Chat with ${esc(f.nick)}">${ICON.chat}</button>
+    </div>`;
+  }).join('') : '<p class="s-lead">No friends yet. Find a player by nickname above and add them from their profile.</p>';
+}
+$('frBack').addEventListener('click', () => { friendsScreen.hidden = true; syncLock(); });
+$('frMe').addEventListener('click', () => { if (myNick) openProfile(myNick); });
+$('frSearch').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const nick = $('frNick').value.trim();
+  if (!/^[\p{L}\p{N}_-]{3,16}$/u.test(nick)) return toast(ERR.bad_nick);
+  openProfile(nick);
+});
+$('frList').addEventListener('click', (e) => {
+  const row = e.target.closest('.fr-row');
+  if (!row) return;
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'invite') inviteNick(row.dataset.nick);
+  else if (act === 'chat') toast('Chat is coming soon');
+  else if (e.target.closest('.fr-open')) openProfile(row.dataset.nick);
+});
+setInterval(() => { if (!friendsScreen.hidden && wsOpen()) send({ type: 'friends_list' }); }, 10_000);   // online dots
+
+/* ---------- profile ---------- */
+let pfNick = null, pfData = null;
+const pfStack = [];                              // profiles we came from (opponent -> opponent -> ...)
+
+function openProfile(nick, fromProfile = false) {
+  if (fromProfile && pfNick) pfStack.push(pfNick);
+  pfNick = nick; pfData = null;
+  $('pfBody').innerHTML = '<p class="s-lead">Loading…</p>';
+  profileScreen.hidden = false; syncLock();
+  send({ type: 'profile_get', nick });
+}
+$('pfBack').addEventListener('click', () => {
+  const prev = pfStack.pop();
+  if (prev) { openProfile(prev); return; }
+  profileScreen.hidden = true; pfNick = null; pfData = null; syncLock();
+});
+function onProfile(m) {
+  if (profileScreen.hidden || !pfNick || !sameNick(m.nick, pfNick)) return;   // stale answer
+  pfData = m;
+  renderProfile(m);
+}
+function onFriendChanged(m) {
+  toast({
+    you: m.friend ? `${m.nick} added to friends` : `${m.nick} removed from friends`,
+    them: m.friend ? `${m.nick} added you as a friend` : `${m.nick} removed you from friends`,
+  }[m.by] || '');
+  if (pfData && sameNick(pfData.nick, m.nick)) { pfData.friend = m.friend; renderProfile(pfData); }
+  if (!friendsScreen.hidden) send({ type: 'friends_list' });
+}
+
+function histRow(h) {
+  return `<button type="button" class="hr ${h.res}" data-nick="${esc(h.opp)}">
+    <span class="hr-res">${{ win: 'W', loss: 'L', draw: 'D' }[h.res]}</span>
+    ${avatarHTML(h.oppAvatar, 's')}
+    <span class="hr-main"><b>${esc(h.opp)}</b><small>${h.min}+${h.inc} · ${REASON[h.reason] || ''} · ${Math.ceil(h.plies / 2)} moves</small></span>
+    <span class="hr-when" title="${new Date(h.at).toLocaleString()}">${ago(h.at)}</span>
+  </button>`;
+}
+function renderProfile(p) {
+  const body = $('pfBody');
+  if (p.missing) { body.innerHTML = `<p class="s-lead">Player “${esc(p.nick)}” was not found.</p>`; return; }
+  const n = p.history.length;
+  const cnt = (r) => p.history.filter((h) => h.res === r).length;
+  const w = cnt('win'), d = cnt('draw'), l = cnt('loss');
+  const pct = (x) => (n ? (x / n * 100).toFixed(1) : 0);
+  const can = p.online && !p.busy;
+  const actions = p.self ? '' : `
+    <button type="button" class="pf-btn" data-act="friend" title="${p.friend ? 'Remove from friends' : 'Add to friends'}" aria-label="${p.friend ? 'Remove from friends' : 'Add to friends'}">${p.friend ? ICON.delUser : ICON.addUser}</button>
+    <button type="button" class="pf-btn" data-act="chat" title="Chat" aria-label="Chat">${ICON.chat}</button>
+    <button type="button" class="pf-btn go" data-act="invite" title="${can ? `Invite to ${olSel[0]}+${olSel[1]}` : p.busy ? 'In a game' : 'Offline'}" aria-label="Invite to a game"${can ? '' : ' disabled'}>${ICON.swords}</button>`;
+  body.innerHTML = `
+  <div class="pf" style="--h:${p.avatar.h | 0}">
+    <div class="pf-banner"></div>
+    <div class="pf-left">
+      <div class="pf-av">${avatarHTML(p.avatar, 'big')}</div>
+      <div class="pf-side">
+        <div class="card">
+          <h3>${n ? `Last ${n} game${n === 1 ? '' : 's'}` : 'Statistics'}</h3>
+          <div class="stats"><span><b>${w}</b>Wins</span><span><b>${d}</b>Draws</span><span><b>${l}</b>Losses</span></div>
+          <div class="bar"><i class="w" style="width:${pct(w)}%"></i><i class="d" style="width:${pct(d)}%"></i><i class="l" style="width:${pct(l)}%"></i></div>
+        </div>
+        <div class="card soon"><h3>Achievements</h3><p>Coming soon</p></div>
+      </div>
+    </div>
+    <div class="pf-right">
+      <div class="pf-head">
+        <div class="pf-name">
+          <h2>${esc(p.nick)}</h2>
+          <span class="pf-elo" title="Rating (placeholder)"><b>${p.elo}</b><small>ELO</small></span>
+          ${p.online ? '<span class="pf-on">online</span>' : ''}
+        </div>
+        <div class="pf-actions">${actions}</div>
+      </div>
+      <div class="pf-hist">
+        <h3>Match history</h3>
+        ${n ? `<div class="hist">${p.history.map(histRow).join('')}</div>` : '<p class="muted">No games yet.</p>'}
+      </div>
+    </div>
+  </div>`;
+}
+$('pfBody').addEventListener('click', (e) => {
+  const hr = e.target.closest('.hr');
+  if (hr) { openProfile(hr.dataset.nick, true); return; }
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (!act || !pfData) return;
+  if (act === 'chat') toast('Chat is coming soon');
+  else if (act === 'invite') inviteNick(pfData.nick);
+  else if (act === 'friend') {
+    if (pfData.friend && !confirm(`Remove ${pfData.nick} from friends?`)) return;
+    send({ type: pfData.friend ? 'friend_remove' : 'friend_add', nick: pfData.nick });
+  }
+});
