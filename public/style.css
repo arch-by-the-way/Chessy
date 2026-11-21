@@ -590,12 +590,12 @@
   .acct { padding: 8px 12px; font-size: .9rem; max-width: 120px; }
 }
 
-#nick::-webkit-search-cancel-button {
+#nick::-webkit-search-cancel-button, #frNick::-webkit-search-cancel-button {
   -webkit-appearance: none; appearance: none;
   width: 16px; height: 16px; margin-left: 6px; cursor: pointer; opacity: .45;
   background: center / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M5 5l14 14M19 5L5 19'/%3E%3C/svg%3E");
 }
-#nick::-webkit-search-cancel-button:hover { opacity: .8; }
+#nick::-webkit-search-cancel-button:hover, #frNick::-webkit-search-cancel-button:hover { opacity: .8; }
 
 /* ---------- Friends & profile ---------- */
 .s-inner.wide { width: min(100%, 880px); }
@@ -697,3 +697,6 @@
   .av.big { --sz: 96px; }
   .pf-banner { height: 190px; }
 }
+
+#tcDialog .dlg { display: grid; gap: 14px; }
+#tcDialog .tc-summary { text-align: center; color: var(--muted); font-weight: 800; }

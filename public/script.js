@@ -215,7 +215,7 @@ function play() {
 const dlg = document.getElementById('playDialog');
 const statusEl = document.getElementById('status');
 const findBtn = document.getElementById('findBtn');
-const QUICK = { bullet: [1, 0], blitz: [3, 2], rapid: [10, 0] };   // menu shortcuts preselect a time control
+const QUICK = { bullet: [60, 0], blitz: [180, 2], rapid: [600, 0] }; // menu shortcuts preselect a time control
 
 function openPlay(e, tc) {
   if (e && e.preventDefault) e.preventDefault();
@@ -261,6 +261,7 @@ const MENU = [
 const drawer = document.getElementById('drawer');
 const burger = document.getElementById('burger');
 const toastEl = document.getElementById('toast');
+
 let idx = 0;
 
 function itemHTML(it) {
@@ -330,7 +331,8 @@ const tcGroupsEl = $('tcGroups');
 
 // same idea as Lichess: category from estimated duration (base + 40 moves of bonus)
 const catOf = (min, inc) => { const e = min * 60 + inc * 40; return e < 180 ? 'Bullet' : e < 480 ? 'Blitz' : e < 1500 ? 'Rapid' : 'Classical'; };
-const tcLabel = (min, inc) => min === 0 ? 'No time limit' : `${min} min` + (inc ? ` + ${inc} sec` : '');
+const baseLabel = min => { const s = Math.round(min * 60); return s % 60 === 0 ? `${s / 60} min` : s < 60 ? `${s} sec` : `${Math.floor(s / 60)} min ${s % 60} sec`; };
+const tcLabel = (min, inc) => min === 0 ? 'No time limit' : baseLabel(min) + (inc ? ` + ${inc} sec` : '');
 
 tcGroupsEl.innerHTML = TC_GROUPS.map(g => `
   <div class="tc-group">
@@ -358,27 +360,43 @@ tcGroupsEl.addEventListener('click', e => {
   tcSel = { min: +t.dataset.m, inc: +t.dataset.i, cat: t.dataset.cat, custom: false };
   refreshTc();
 });
+
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const parseNum = s => parseFloat(String(s).replace(',', '.'));
+const cleanDecimal = v => {                       // digits plus ONE decimal separator; a comma becomes a dot
+  v = v.replace(/[^\d.,]/g, '').replace(/,/g, '.');
+  const k = v.indexOf('.');
+  return k < 0 ? v : v.slice(0, k + 1) + v.slice(k + 1).replace(/\./g, '');
+};
+const MIN_SEC = 10, MAX_SEC = 180 * 60, MAX_INC = 180;
+// minutes may be fractional (0.5, "1,5") and become whole seconds; the bonus is rounded to whole seconds
+function toTc(minText, incText) {
+  const m = parseNum(minText), i = parseNum(incText);
+  return {
+    sec: clamp(Math.round((isNaN(m) ? 1 : m) * 60), MIN_SEC, MAX_SEC),
+    inc: clamp(Math.round(isNaN(i) ? 0 : i), 0, MAX_INC),
+  };
+}
+const minText = sec => String(+(sec / 60).toFixed(3));     // 90 -> "1.5", 10 -> "0.167"
 function readCustom(normalize) {
-  let m = parseInt($('cMin').value, 10), i = parseInt($('cInc').value, 10);
-  m = clamp(isNaN(m) ? 1 : m, 1, 180);
-  i = clamp(isNaN(i) ? 0 : i, 0, 180);
-  if (normalize) { $('cMin').value = m; $('cInc').value = i; }
-  tcSel = { min: m, inc: i, cat: catOf(m, i), custom: true };
+  const { sec, inc } = toTc($('cMin').value, $('cInc').value);
+  if (normalize) { $('cMin').value = minText(sec); $('cInc').value = inc; }
+  const min = sec / 60;
+  tcSel = { min, inc, cat: catOf(min, inc), custom: true };
   refreshTc();
 }
 ['cMin', 'cInc'].forEach(id => {
   $(id).addEventListener('input', e => {
-    const el = e.target, d = el.value.replace(/\D/g, '');
-    if (el.value !== d) el.value = d;                 // digits only
+    const el = e.target, d = cleanDecimal(el.value);
+    if (el.value !== d) el.value = d;
     readCustom(false);
   });
-  $(id).addEventListener('keydown', e => {              // keep the ↑ / ↓ keys working without visible arrows
+  $(id).addEventListener('keydown', e => {              // ↑ / ↓: ±1 minute or ±1 second
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
     e.preventDefault();
-    const el = e.target, lo = +el.dataset.min, hi = +el.dataset.max;
-    const v = parseInt(el.value, 10);
-    el.value = clamp((isNaN(v) ? lo : v) + (e.key === 'ArrowUp' ? 1 : -1), lo, hi);
+    const el = e.target, step = e.key === 'ArrowUp' ? 1 : -1, v = parseNum(el.value);
+    if (id === 'cMin') el.value = minText(clamp(Math.round(((isNaN(v) ? 1 : v) + step) * 60), MIN_SEC, MAX_SEC));
+    else el.value = clamp(Math.round(isNaN(v) ? 0 : v) + step, 0, MAX_INC);
     readCustom(false);
   });
   $(id).addEventListener('change', () => readCustom(true));
@@ -715,7 +733,7 @@ function newGame() {
   G.sel = -1; G.last = null; G.anim = false; G.over = false; G.paused = false; G.hold = false; G.pending = null;
   scoreEvaluate();
   G.unlimited = tc.min === 0;
-  G.clk = { w: tc.min * 60000, b: tc.min * 60000 };
+  G.clk = { w: Math.round(tc.min * 60000), b: Math.round(tc.min * 60000) };
   G.moves = 0; G.seen = {}; G.seen[posKey(G.s)] = 1;
   G.res = null; G.hist = [snapshot(null)]; G.hi = 0;
   G.flipped = false; G.tick = performance.now();

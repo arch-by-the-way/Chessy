@@ -255,6 +255,27 @@
     </div>
   </dialog>
 
+    <!-- Time control picker for invitations (crossed swords) -->
+  <dialog id="tcDialog" aria-labelledby="tcdTitle">
+    <div class="dlg">
+      <div class="dlg-head">
+        <h3 id="tcdTitle">Invite</h3>
+        <button class="x" type="button" id="tcdClose" aria-label="Close">×</button>
+      </div>
+      <div class="tiles sm" id="tcdTiles"></div>
+      <div class="custom-row" id="tcdCustom">
+        <label>Minutes per side
+          <input id="tcdMin" type="text" inputmode="decimal" maxlength="6" autocomplete="off">
+        </label>
+        <label>Bonus per move (sec)
+          <input id="tcdInc" type="text" inputmode="decimal" maxlength="6" autocomplete="off">
+        </label>
+      </div>
+      <div class="tc-summary" id="tcdSummary"></div>
+      <button class="btn primary" type="button" id="tcdSend" style="font-size:1.2rem;padding:16px">Send invitation</button>
+    </div>
+  </dialog>
+  
     <!-- ===== Friends ===== -->
   <section class="screen" id="friendsScreen" hidden aria-label="Friends">
     <div class="s-top">
@@ -268,7 +289,7 @@
       <div class="s-inner">
         <form class="search fr-search" id="frSearch" autocomplete="off">
           <input id="frNick" type="search" placeholder="Find a player by nickname" maxlength="16" aria-label="Nickname">
-          <button class="btn secondary" type="submit">Open</button>
+          <button class="btn secondary" type="submit" id="frOpen">Open</button>
         </form>
         <div id="frList"></div>
       </div>

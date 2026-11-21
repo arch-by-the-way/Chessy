@@ -74,7 +74,7 @@ function onNet(raw) {
     case 'link_code':    say(`Link code: ${m.code.slice(0, 4)}-${m.code.slice(4)} (valid for 2 minutes). Enter it on your other device.`); break;
     case 'searching':    setBusy('search', 'Looking for an opponent…'); break;
     case 'invite_sent':  outInviteId = m.inviteId; outInviteTo = m.to; setBusy('invite', `Invitation sent to ${m.to}. Waiting for an answer…`); break;
-    case 'invite':       showInvitePopup(m.inviteId, m.from, m.min, m.inc); break;
+    case 'invite':       showInvitePopup(m.inviteId, m.from, m.sec, m.inc); text.textContent = `${from} invites you to a ${fmtTc(sec, inc)} game`; break;
     case 'invite_closed': onInviteClosed(m); break;
     case 'game_start':
     case 'game_sync':    onGame(m); break;
@@ -82,7 +82,7 @@ function onNet(raw) {
     case 'game_end':     onNetEnd(m); break;
     case 'opp_status':   if (G.net && !G.over) toast(m.online ? 'Opponent is back' : 'Opponent disconnected. Waiting up to 60 s…'); break;
     case 'nick_status': onNickStatus(m); break;
-    case 'friends':        renderFriends(m.list); break;
+    case 'friends':        renderFriends(m.list, title="${can ? 'Invite to a game' : 'Not available right now'}"); break;
     case 'profile':        onProfile(m); break;
     case 'friend_changed': onFriendChanged(m); break;
   }
@@ -180,7 +180,7 @@ function beginOnline(m) {
   setMenu(false);
   timeScreen.hidden = true;
   G.net = { gameId: m.gameId, color: m.color, me: m.you, opponent: m.opponent };
-  G.tc = { min: m.min, inc: m.inc, cat: catOf(m.min, m.inc) };
+  G.tc = { min: m.sec / 60, inc: m.inc, cat: catOf(m.sec / 60, m.inc) };
   gameScreen.hidden = false; lockScroll();
   applyTheme(); applyPieces(); newGame();        // the original newGame; it resets G.hist, so undo/redo stay disabled
   G.flipped = m.color === 'b';
@@ -285,12 +285,15 @@ function layoutInvites() {
 }
 
 // while the play dialog is open (top layer) the stack must live inside it, otherwise it is hidden behind it
+const tcDlg = $('tcDialog');                     // (declare above `const invStack`)
 function mountInvites() {
-  const host = dlg.open ? dlg.querySelector('.dlg') : document.body;
+  const host = (dlg.open ? dlg : tcDlg.open ? tcDlg : null)?.querySelector('.dlg') ?? document.body;
   if (invStack.parentNode !== host) host.append(invStack);
   layoutInvites();
 }
+
 new MutationObserver(mountInvites).observe(dlg, { attributes: true, attributeFilter: ['open'] });
+new MutationObserver(mountInvites).observe(tcDlg, { attributes: true, attributeFilter: ['open'] });
 addEventListener('resize', layoutInvites);
 mountInvites();
 
@@ -326,19 +329,21 @@ function clearInvites() {
 }
 
 /* ---------- play dialog ---------- */
-const OL_TC = [[1, 0], [1, 1], [3, 0], [3, 2], [5, 0], [10, 0], [15, 10], [30, 0]];
-let olSel = [5, 0];
+const fmtBase = (sec) => sec % 60 === 0 ? String(sec / 60) : `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+const fmtTc = (sec, inc) => `${fmtBase(sec)}+${inc}`;
+const OL_TC = [[60, 0], [60, 1], [180, 0], [180, 2], [300, 0], [600, 0], [900, 10], [1800, 0]];   // [seconds, bonus seconds]
+let olSel = [300, 0];
 
 function renderOlTc() {
-  $('olTc').innerHTML = OL_TC.map(([m, i]) => `
-    <button type="button" class="tile${m === olSel[0] && i === olSel[1] ? ' sel' : ''}" data-m="${m}" data-i="${i}"${netBusy ? ' disabled' : ''}>
-      <span class="t-main">${m}+${i}</span><span class="t-sub">${catOf(m, i)}</span>
+  $('olTc').innerHTML = OL_TC.map(([s, i]) => `
+    <button type="button" class="tile${s === olSel[0] && i === olSel[1] ? ' sel' : ''}" data-s="${s}" data-i="${i}"${netBusy ? ' disabled' : ''}>
+      <span class="t-main">${fmtTc(s, i)}</span><span class="t-sub">${catOf(s / 60, i)}</span>
     </button>`).join('');
 }
-function pickOnlineTc(min, inc) { olSel = [min, inc]; renderOlTc(); }
+function pickOnlineTc(sec, inc) { olSel = [sec, inc]; renderOlTc(); }
 $('olTc').addEventListener('click', (e) => {
   const t = e.target.closest('.tile');
-  if (t && !netBusy) pickOnlineTc(+t.dataset.m, +t.dataset.i);
+  if (t && !netBusy) pickOnlineTc(+t.dataset.s, +t.dataset.i);
 });
 
 function setBusy(kind, text = '') {
@@ -382,7 +387,7 @@ $('linkBtn').addEventListener('click', () => { if (!send({ type: 'create_link_co
 
 findBtn.addEventListener('click', () => {
   if (netBusy) { send({ type: 'cancel' }); outInviteId = null; setBusy(null); return; }
-  if (!send({ type: 'find', min: olSel[0], inc: olSel[1] })) return say('Not connected to the server yet.');
+  if (!send({ type: 'find', sec: olSel[0], inc: olSel[1] })) return say('Not connected to the server yet.');
   setBusy('search', 'Looking for an opponent…');
 });
 $('searchForm').addEventListener('submit', (e) => {
@@ -400,98 +405,30 @@ dlg.addEventListener('close', () => {
 });
 
 /* ---------- live nickname check (500 ms after the last keystroke) ---------- */
-const nickEl = $('nick'), inviteBtnEl = $('inviteBtn');
+// field: 'found' = online and can be invited (Invite); 'exists' = has an account (Open in Friends)
 const normNickC = (s) => s.normalize('NFKC').trim().toLowerCase();
-let nickTimer = null;
-
-const markFound = (on) => inviteBtnEl.classList.toggle('found', on);
-
-nickEl.addEventListener('input', () => {
-  clearTimeout(nickTimer);
-  markFound(false);                                    // any edit invalidates the previous answer
-  const nick = nickEl.value.trim();
-  if (!/^[\p{L}\p{N}_-]{3,16}$/u.test(nick)) return;
-  nickTimer = setTimeout(() => send({ type: 'check_nick', nick }), 500);
-});
-
-function onNickStatus(m) {
-  // ignore stale answers: the field may have changed while the request was in flight
-  if (normNickC(m.nick) === normNickC(nickEl.value)) markFound(m.found && !netBusy);
+function liveNickCheck(input, btn, field) {
+  let timer = null;
+  const mark = (on) => btn.classList.toggle('found', on);
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    mark(false);                                       // any edit invalidates the previous answer
+    const nick = input.value.trim();
+    if (!/^[\p{L}\p{N}_-]{3,16}$/u.test(nick)) return;
+    timer = setTimeout(() => send({ type: 'check_nick', nick }), 500);
+  });
+  return {
+    mark,
+    onStatus(m) {                                      // ignore stale answers: the field may have changed meanwhile
+      if (normNickC(m.nick) === normNickC(input.value)) mark(!!m[field] && !(field === 'found' && netBusy));
+    },
+  };
 }
-
-/* ======================= Friends & profiles ======================= */
-const friendsScreen = $('friendsScreen'), profileScreen = $('profileScreen');
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const sameNick = (a, b) => String(a).normalize('NFKC').trim().toLowerCase() === String(b).normalize('NFKC').trim().toLowerCase();
-const syncLock = () => { lockScroll(); if (!friendsScreen.hidden || !profileScreen.hidden) document.body.style.overflow = 'hidden'; };
-
-const ICON = {
-  swords: '<svg class="ic" viewBox="0 0 24 24"><path d="M4 4l16 16M20 4L4 20M13.5 18.5l5-5M10.5 18.5l-5-5"/></svg>',
-  chat: '<svg class="ic" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>',
-  addUser: '<svg class="ic" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M19 8v6M16 11h6"/></svg>',
-  delUser: '<svg class="ic" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M17 9l5 5M22 9l-5 5"/></svg>',
-};
-const REASON = {
-  checkmate: 'Checkmate', stalemate: 'Stalemate', insufficient: 'Insufficient material', fifty: 'Fifty-move rule',
-  repetition: 'Repetition', resign: 'Resignation', timeout: 'On time', opponent_left: 'Opponent left',
-};
-
-// the avatar is a coloured disc with a piece; colour and piece are chosen once by the server when the nickname is created
-const avatarHTML = (av, cls = '') => {
-  const a = av || { h: 0, p: 'p' };
-  return `<span class="av ${cls}" style="--h:${a.h | 0}" aria-hidden="true">${GLYPH[a.p] || GLYPH.p}</span>`;
-};
-const ago = (t) => {
-  const s = (Date.now() - t) / 1000;
-  return s < 60 ? 'just now' : s < 3600 ? `${Math.floor(s / 60)} min ago` : s < 86400 ? `${Math.floor(s / 3600)} h ago` : `${Math.floor(s / 86400)} d ago`;
-};
-
-function inviteNick(nick) {                      // crossed-swords button: invite with the time control chosen in the Play dialog
-  outInviteTo = nick;
-  if (!send({ type: 'invite', to: nick, min: olSel[0], inc: olSel[1] })) toast('Not connected to the server yet.');
-}
-function hideSocial() {                          // a game is starting: both screens must go away
-  friendsScreen.hidden = true; profileScreen.hidden = true;
-  pfStack.length = 0; pfNick = null; pfData = null;
-  syncLock();
-}
-
-/* ---------- friends list ---------- */
-function openFriends() {
-  if (!myNick) { openPlay(); say('Register to use Friends.'); return; }
-  friendsScreen.hidden = false; syncLock();
-  send({ type: 'friends_list' });
-}
-function renderFriends(list) {
-  $('frList').innerHTML = list.length ? list.map((f) => {
-    const can = f.online && !f.busy;
-    return `<div class="fr-row" data-nick="${esc(f.nick)}">
-      <button type="button" class="fr-open">
-        <span class="av-wrap">${avatarHTML(f.avatar, 'm')}<i class="dot${f.online ? ' on' : ''}"></i></span>
-        <span class="fr-main"><b>${esc(f.nick)}</b><small>${f.busy ? 'In a game' : f.online ? 'Online' : 'Offline'}</small></span>
-      </button>
-      <button type="button" class="ic-btn go" data-act="invite" title="${can ? `Invite to ${olSel[0]}+${olSel[1]}` : 'Not available right now'}" aria-label="Invite ${esc(f.nick)} to a game"${can ? '' : ' disabled'}>${ICON.swords}</button>
-      <button type="button" class="ic-btn" data-act="chat" title="Chat" aria-label="Chat with ${esc(f.nick)}">${ICON.chat}</button>
-    </div>`;
-  }).join('') : '<p class="s-lead">No friends yet. Find a player by nickname above and add them from their profile.</p>';
-}
-$('frBack').addEventListener('click', () => { friendsScreen.hidden = true; syncLock(); });
-$('frMe').addEventListener('click', () => { if (myNick) openProfile(myNick); });
-$('frSearch').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const nick = $('frNick').value.trim();
-  if (!/^[\p{L}\p{N}_-]{3,16}$/u.test(nick)) return toast(ERR.bad_nick);
-  openProfile(nick);
-});
-$('frList').addEventListener('click', (e) => {
-  const row = e.target.closest('.fr-row');
-  if (!row) return;
-  const act = e.target.closest('[data-act]')?.dataset.act;
-  if (act === 'invite') inviteNick(row.dataset.nick);
-  else if (act === 'chat') toast('Chat is coming soon');
-  else if (e.target.closest('.fr-open')) openProfile(row.dataset.nick);
-});
-setInterval(() => { if (!friendsScreen.hidden && wsOpen()) send({ type: 'friends_list' }); }, 10_000);   // online dots
+const nickEl = $('nick');
+const inviteCheck = liveNickCheck(nickEl, $('inviteBtn'), 'found');
+const openCheck = liveNickCheck($('frNick'), $('frOpen'), 'exists');
+const markFound = inviteCheck.mark;                    // setBusy() uses this name
+function onNickStatus(m) { inviteCheck.onStatus(m); openCheck.onStatus(m); }
 
 /* ---------- profile ---------- */
 let pfNick = null, pfData = null;
@@ -527,7 +464,7 @@ function histRow(h) {
   return `<button type="button" class="hr ${h.res}" data-nick="${esc(h.opp)}">
     <span class="hr-res">${{ win: 'W', loss: 'L', draw: 'D' }[h.res]}</span>
     ${avatarHTML(h.oppAvatar, 's')}
-    <span class="hr-main"><b>${esc(h.opp)}</b><small>${h.min}+${h.inc} · ${REASON[h.reason] || ''} · ${Math.ceil(h.plies / 2)} moves</small></span>
+    <span class="hr-main"><b>${esc(h.opp)}</b><small>${fmtTc(h.sec, h.inc)} · ${REASON[h.reason] || ''} · ${Math.ceil(h.plies / 2)} moves</small></span>
     <span class="hr-when" title="${new Date(h.at).toLocaleString()}">${ago(h.at)}</span>
   </button>`;
 }
@@ -584,4 +521,54 @@ $('pfBody').addEventListener('click', (e) => {
     if (pfData.friend && !confirm(`Remove ${pfData.nick} from friends?`)) return;
     send({ type: pfData.friend ? 'friend_remove' : 'friend_add', nick: pfData.nick });
   }
+});
+
+/* ---------- time-control picker for invitations (crossed swords) ---------- */
+let tcdTarget = '', tcdLast = null, tcdSel = { sec: 300, inc: 0, custom: false };
+
+function renderTcd() {
+  $('tcdTiles').innerHTML = OL_TC.map(([s, i]) => `
+    <button type="button" class="tile${!tcdSel.custom && s === tcdSel.sec && i === tcdSel.inc ? ' sel' : ''}" data-s="${s}" data-i="${i}">
+      <span class="t-main">${fmtTc(s, i)}</span><span class="t-sub">${catOf(s / 60, i)}</span>
+    </button>`).join('');
+  $('tcdCustom').classList.toggle('sel', tcdSel.custom);
+  $('tcdSummary').textContent = `${catOf(tcdSel.sec / 60, tcdSel.inc)}: ${fmtTc(tcdSel.sec, tcdSel.inc)}`;
+}
+function readTcd(normalize) {                      // custom fields -> whole seconds
+  const { sec, inc } = toTc($('tcdMin').value, $('tcdInc').value);
+  if (normalize) { $('tcdMin').value = minText(sec); $('tcdInc').value = inc; }
+  tcdSel = { sec, inc, custom: true };
+  renderTcd();
+}
+function openTcPicker(nick) {
+  tcdTarget = nick;
+  const s = tcdLast || { sec: olSel[0], inc: olSel[1] };
+  tcdSel = { ...s, custom: !OL_TC.some(([a, b]) => a === s.sec && b === s.inc) };
+  $('tcdMin').value = minText(s.sec); $('tcdInc').value = s.inc;
+  $('tcdTitle').textContent = `Invite ${nick}`;
+  renderTcd();
+  tcDlg.showModal();
+}
+function inviteNick(nick) { openTcPicker(nick); }  // called by the crossed-swords buttons
+
+$('tcdTiles').addEventListener('click', (e) => {
+  const t = e.target.closest('.tile');
+  if (!t) return;
+  tcdSel = { sec: +t.dataset.s, inc: +t.dataset.i, custom: false };
+  $('tcdMin').value = minText(tcdSel.sec); $('tcdInc').value = tcdSel.inc;     // the custom fields mirror the choice
+  renderTcd();
+});
+['tcdMin', 'tcdInc'].forEach((id) => {
+  const el = $(id);
+  el.addEventListener('input', () => { const d = cleanDecimal(el.value); if (el.value !== d) el.value = d; readTcd(false); });
+  el.addEventListener('change', () => readTcd(true));
+  el.addEventListener('focus', () => readTcd(false));
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { readTcd(true); $('tcdSend').click(); } });
+});
+$('tcdClose').addEventListener('click', () => tcDlg.close());
+$('tcdSend').addEventListener('click', () => {
+  tcdLast = { sec: tcdSel.sec, inc: tcdSel.inc };
+  tcDlg.close();
+  outInviteTo = tcdTarget;
+  if (!send({ type: 'invite', to: tcdTarget, sec: tcdSel.sec, inc: tcdSel.inc })) toast('Not connected to the server yet.');
 });

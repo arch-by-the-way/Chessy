@@ -35,8 +35,8 @@ const normNick = (s) => String(s).normalize('NFKC').trim().toLowerCase();
 const validNick = (s) => /^[\p{L}\p{N}_-]{3,16}$/u.test(s);
 const RESERVED = new Set(['admin', 'system', 'moderator']);
 const REASONS = new Set(['checkmate', 'stalemate', 'insufficient', 'fifty', 'repetition']);
-const validTc = (min, inc) =>
-  Number.isInteger(min) && Number.isInteger(inc) && min >= 1 && min <= 180 && inc >= 0 && inc <= 180;
+const validTc = (sec, inc) =>
+  Number.isInteger(sec) && Number.isInteger(inc) && sec >= 10 && sec <= 10_800 && inc >= 0 && inc <= 180; 
 const nickOf = (id) => users.get(id)?.nick;
 const inGame = (id) => !!users.get(id)?.gameId;
 const isOnline = (id) => (users.get(id)?.sockets.size ?? 0) > 0;
@@ -99,7 +99,7 @@ function recordHistory(g, reason, winner) {            // called once per finish
     const color = id === g.white ? 'w' : 'b';
     u.history.unshift({
       opp: other(g, id), color, res: !winner ? 'draw' : winner === color ? 'win' : 'loss',
-      reason, min: g.min, inc: g.inc, plies: g.moves.length, at,
+      reason, sec: g.sec, inc: g.inc, plies: g.moves.length, at,
     });
     if (u.history.length > HISTORY_MAX) u.history.length = HISTORY_MAX;
   }
@@ -123,14 +123,14 @@ const gameInfo = (gameId, g, id) => ({
   color: id === g.white ? 'w' : 'b',
   you: nickOf(id),
   opponent: nickOf(other(g, id)),
-  min: g.min, inc: g.inc,
+  sec: g.sec, inc: g.inc,
 });
 function syncMsg(gameId, g, id) {           // full state for a client that (re)connects
   const clk = { ...g.clk };
   if (g.moves.length >= 2) clk[g.turn] = Math.max(0, clk[g.turn] - (Date.now() - g.since));
   return { ...gameInfo(gameId, g, id), type: 'game_sync', moves: g.moves, clk };
 }
-function startGame(a, b, min, inc) {
+function startGame(a, b, sec, inc) {
   unqueue(a); unqueue(b);
   for (const [id, inv] of invites)
     if ([a, b].includes(inv.from) || [a, b].includes(inv.to)) closeInvite(id, 'cancelled');
@@ -138,8 +138,8 @@ function startGame(a, b, min, inc) {
   const white = Math.random() < 0.5 ? a : b;
   const black = white === a ? b : a;
   const g = {
-    white, black, min, inc, moves: [], turn: 'w',
-    clk: { w: min * 60_000, b: min * 60_000 }, since: Date.now(), flag: null, claims: {},
+    white, black, sec, inc, moves: [], turn: 'w',
+    clk: { w: sec * 1000, b: sec * 1000 }, since: Date.now(), flag: null, claims: {},
   };
   games.set(gameId, g);
   users.get(a).gameId = gameId;
@@ -291,7 +291,7 @@ wss.on('connection', (ws) => {
     if (!rateOk(ws, 'chk', 30)) return;                 // silent: this is only a UI hint
     const nick = String(msg.nick ?? '');
     const id = validNick(nick.trim()) ? nickIndex.get(normNick(nick)) : null;
-    return send({ type: 'nick_status', nick, found: !!id && id !== ws.userId && isOnline(id) });
+  return send({ type: 'nick_status', nick, found: !!id && isOnline(id) && id !== ws.userId, exists: !!id });
   }
 
   /* ----- friends & profiles ----- */
@@ -316,7 +316,7 @@ if (msg.type === 'profile_get') {
     self: id === ws.userId, friend: users.get(ws.userId).friends.has(id),
     history: u.history.map((h) => {
       const o = users.get(h.opp);
-      return { ...h, opp: o?.nick ?? '?', oppAvatar: o?.avatar };
+    return { ...h, sec: h.sec ?? h.min * 60, opp: o?.nick ?? '?', oppAvatar: o?.avatar };
     }),
   });
 }
@@ -339,16 +339,16 @@ if (msg.type === 'friend_add' || msg.type === 'friend_remove') {
     if (msg.type === 'find') {
       if (!rateOk(ws)) return send({ type: 'error', reason: 'rate_limited' });
       if (inGame(ws.userId)) return send({ type: 'error', reason: 'already_in_game' });
-      const min = Number(msg.min), inc = Number(msg.inc);
-      if (!validTc(min, inc)) return send({ type: 'error', reason: 'bad_tc' });
+      const sec = Number(msg.sec), inc = Number(msg.inc);
+      if (!validTc(sec, inc)) return send({ type: 'error', reason: 'bad_tc' });
       unqueue(ws.userId);
-      const i = queue.findIndex((q) => q.min === min && q.inc === inc && q.userId !== ws.userId);
+      const i = queue.findIndex((q) => q.sec === sec && q.inc === inc && q.userId !== ws.userId);
       if (i >= 0) {
         const [opp] = queue.splice(i, 1);
-        return startGame(opp.userId, ws.userId, min, inc);
+        return startGame(opp.userId, ws.userId, sec, inc);
       }
-      queue.push({ userId: ws.userId, min, inc });
-      return send({ type: 'searching', min, inc });
+      queue.push({ userId: ws.userId, sec, inc });
+      return send({ type: 'searching', sec, inc });
     }
 
     // cancels both the search and my outgoing invitation
@@ -362,8 +362,8 @@ if (msg.type === 'friend_add' || msg.type === 'friend_remove') {
     if (msg.type === 'invite') {
       if (!rateOk(ws)) return send({ type: 'error', reason: 'rate_limited' });
       if (inGame(ws.userId)) return send({ type: 'error', reason: 'already_in_game' });
-      const min = Number(msg.min), inc = Number(msg.inc);
-      if (!validTc(min, inc)) return send({ type: 'error', reason: 'bad_tc' });
+      const sec = Number(msg.sec), inc = Number(msg.inc);
+      if (!validTc(sec, inc)) return send({ type: 'error', reason: 'bad_tc' });
       const toId = nickIndex.get(normNick(msg.to ?? ''));
       if (!toId || !isOnline(toId)) return send({ type: 'error', reason: 'no_such_user' });
       if (toId === ws.userId) return send({ type: 'error', reason: 'self_invite' });
@@ -372,8 +372,8 @@ if (msg.type === 'friend_add' || msg.type === 'friend_remove') {
       unqueue(ws.userId);
       const id = crypto.randomUUID();
       const timer = setTimeout(() => closeInvite(id, 'expired'), INVITE_TTL);
-      invites.set(id, { from: ws.userId, to: toId, min, inc, timer });
-      sendToUser(toId, { type: 'invite', inviteId: id, from: nickOf(ws.userId), min, inc });
+      invites.set(id, { from: ws.userId, to: toId, sec, inc, timer });
+      sendToUser(toId, { type: 'invite', inviteId: id, from: nickOf(ws.userId), sec, inc });
       return send({ type: 'invite_sent', inviteId: id, to: nickOf(toId) });
     }
 
@@ -383,7 +383,7 @@ if (msg.type === 'friend_add' || msg.type === 'friend_remove') {
       if (!msg.accept) return closeInvite(msg.inviteId, 'declined');
       if (inGame(inv.from) || inGame(inv.to)) return closeInvite(msg.inviteId, 'busy');
       closeInvite(msg.inviteId, 'accepted');
-      return startGame(inv.from, inv.to, inv.min, inv.inc);
+      return startGame(inv.from, inv.to, inv.sec, inv.inc);
     }
 
     /* ----- game ----- */
